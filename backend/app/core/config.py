@@ -17,8 +17,19 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: Optional[str] = None
     LITELLM_MODEL: str = "gpt-3.5-turbo"
     
+    # GCP Configuration
+    GCP_PROJECT_ID: Optional[str] = None
+    GCP_LOCATION: str = "us-central1"
+    
+    # Cloud SQL
+    DATABASE_URL: Optional[str] = None
+    
+    # Vertex AI Vector Search
+    VERTEX_INDEX_ID: Optional[str] = None
+    VERTEX_ENDPOINT_ID: Optional[str] = None
+    
     # Vector Database
-    VECTOR_DB_TYPE: str = "supabase" # "supabase", "pinecone", "milvus"
+    VECTOR_DB_TYPE: str = "supabase" # "supabase", "pinecone", "milvus", "vertex"
     SUPABASE_URL: Optional[str] = None
     SUPABASE_SERVICE_KEY: Optional[str] = None
     

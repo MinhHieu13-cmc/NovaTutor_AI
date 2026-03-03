@@ -1,6 +1,6 @@
 from typing import List, AsyncGenerator
 import litellm
-from backend.app.domain.services.interfaces import ILLMProvider, ChatMessage, LLMResponse
+from app.domain.services.interfaces import ILLMProvider, ChatMessage, LLMResponse
 
 class LiteLLMProvider(ILLMProvider):
     def __init__(self, default_model: str = "gpt-3.5-turbo"):

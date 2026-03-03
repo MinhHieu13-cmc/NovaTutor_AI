@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from backend.app.presentation.api.v1.endpoints import router as api_router
-from backend.app.presentation.middlewares.rate_limit import RateLimitMiddleware
-from backend.app.core.config import settings
+from app.presentation.api.v1.endpoints import router as api_router
+from app.presentation.middlewares.rate_limit import RateLimitMiddleware
+from app.core.config import settings
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

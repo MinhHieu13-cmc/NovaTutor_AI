@@ -1,5 +1,5 @@
 from typing import List, Dict, Any
-from backend.app.domain.services.interfaces import IEmbeddingProvider, IVectorStore
+from app.domain.services.interfaces import IEmbeddingProvider, IVectorStore
 
 class RAGEngine:
     def __init__(

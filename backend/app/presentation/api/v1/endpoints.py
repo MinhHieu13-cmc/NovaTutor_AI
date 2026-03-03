@@ -2,12 +2,24 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from typing import List
 from datetime import datetime
-from backend.app.domain.services.interfaces import ChatMessage
-from backend.app.application.services.orchestrator import Orchestrator
-from backend.app.presentation.api.v1.deps import get_orchestrator, get_current_user
-from backend.app.domain.models.core import User, Workspace
+from app.domain.services.interfaces import ChatMessage
+from app.application.services.orchestrator import Orchestrator
+from app.presentation.api.v1.deps import get_orchestrator, get_current_user
+from app.domain.models.core import User, Workspace
 
 router = APIRouter()
+
+from app.application.websocket.handler import websocket_handler
+from app.infrastructure.voice.processor import VoiceProcessor
+from fastapi import WebSocket
+
+@router.websocket("/ws/chat")
+async def websocket_chat(
+    websocket: WebSocket,
+    orchestrator: Orchestrator = Depends(get_orchestrator)
+):
+    voice_processor = VoiceProcessor(api_key=None) # Trong thực tế lấy từ config
+    await websocket_handler(websocket, orchestrator, voice_processor)
 
 @router.post("/chat/stream")
 async def chat_stream(

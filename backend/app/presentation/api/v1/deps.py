@@ -2,11 +2,11 @@ import os
 from typing import Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from backend.app.domain.models.core import User, UserRole
-from backend.app.application.services.orchestrator import Orchestrator
-from backend.app.application.services.rag_engine import RAGEngine
-from backend.app.domain.services.plugin_base import PluginRegistry
-from backend.app.domain.services.interfaces import (
+from app.domain.models.core import User, UserRole
+from app.application.services.orchestrator import Orchestrator
+from app.application.services.rag_engine import RAGEngine
+from app.domain.services.plugin_base import PluginRegistry
+from app.domain.services.interfaces import (
     ILLMProvider, IEmbeddingProvider, IVectorStore, 
     ChatMessage, LLMResponse
 )
@@ -26,9 +26,39 @@ async def get_current_user(cred: HTTPAuthorizationCredentials = Depends(security
         tenant_id="00000000-0000-0000-0000-000000000000"
     )
 
-from backend.app.infrastructure.llm.litellm_provider import LiteLLMProvider
-from backend.app.application.agents.tutor_agent import TutorAgent
-from backend.app.core.config import settings
+from app.infrastructure.llm.litellm_provider import LiteLLMProvider
+from app.application.agents.tutor_agent import TutorAgent
+from app.application.agents.curriculum_agent import CurriculumAgent
+from app.application.agents.memory_agent import MemoryAgent
+from app.application.agents.assessment_agent import AssessmentAgent
+from app.application.agents.emotion_adapter import EmotionAdapter
+from app.application.services.tool_policy import ToolPolicyLayer
+from google.adk.models import LiteLlm
+from google.adk.models.registry import LLMRegistry
+
+# Đăng ký regex gemini/.* cho LiteLlm provider nếu chưa có
+try:
+    LLMRegistry._register('gemini/.*', LiteLlm)
+except Exception:
+    pass
+
+from app.infrastructure.persistence.repositories.cloud_sql_repository import CloudSQLStudentRepository
+from app.infrastructure.persistence.repositories.cloud_sql_repository import CloudSQLStudentRepository
+from app.infrastructure.persistence.repositories.firestore_session_repository import FirestoreSessionRepository
+from app.infrastructure.vector.vertex_ai_repository import VertexAIVectorRepository
+from app.core.config import settings
+
+def get_student_repository() -> CloudSQLStudentRepository:
+    return CloudSQLStudentRepository(connection_string=settings.DATABASE_URL or "")
+
+def get_session_repository() -> FirestoreSessionRepository:
+    return FirestoreSessionRepository(project_id=settings.GCP_PROJECT_ID or "")
+
+def get_vector_repository() -> VertexAIVectorRepository:
+    return VertexAIVectorRepository(
+        index_id=settings.VERTEX_INDEX_ID or "",
+        endpoint_id=settings.VERTEX_ENDPOINT_ID or ""
+    )
 
 def get_llm_provider() -> ILLMProvider:
     # Default to LiteLLM for routing
@@ -62,15 +92,28 @@ def get_rag_engine(vector_store: IVectorStore = Depends(get_vector_store)) -> Op
 
 def get_orchestrator(
     rag_engine: Optional[RAGEngine] = Depends(get_rag_engine),
-    llm_provider: ILLMProvider = Depends(get_llm_provider)
+    llm_provider: ILLMProvider = Depends(get_llm_provider),
+    student_repo = Depends(get_student_repository),
+    session_repo = Depends(get_session_repository),
+    vector_repo = Depends(get_vector_repository)
 ) -> Orchestrator:
     plugin_registry = PluginRegistry() if settings.ENABLE_PLUGINS else None
     
     tutor_agent = TutorAgent(api_key=settings.GOOGLE_API_KEY)
+    curriculum_agent = CurriculumAgent(vector_repo=vector_repo)
+    memory_agent = MemoryAgent(student_repo=student_repo, session_repo=session_repo)
+    assessment_agent = AssessmentAgent()
+    emotion_adapter = EmotionAdapter()
+    tool_policy = ToolPolicyLayer()
             
     return Orchestrator(
         llm=llm_provider,
         rag_engine=rag_engine,
         plugin_registry=plugin_registry,
-        tutor_agent=tutor_agent
+        tutor_agent=tutor_agent,
+        curriculum_agent=curriculum_agent,
+        memory_agent=memory_agent,
+        assessment_agent=assessment_agent,
+        emotion_adapter=emotion_adapter,
+        tool_policy=tool_policy
     )
