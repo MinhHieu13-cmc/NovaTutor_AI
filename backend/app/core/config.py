@@ -5,7 +5,10 @@ from pydantic import Field
 class Settings(BaseSettings):
     PROJECT_NAME: str = "NovaTutor AI"
     API_V1_STR: str = "/api/v1"
-    
+
+    # Runtime
+    DEBUG: bool = False
+
     # Module Toggling
     ENABLE_RAG: bool = True
     ENABLE_PLUGINS: bool = True
@@ -29,7 +32,7 @@ class Settings(BaseSettings):
     VERTEX_ENDPOINT_ID: Optional[str] = None
     
     # Vector Database
-    VECTOR_DB_TYPE: str = "supabase" # "supabase", "pinecone", "milvus", "vertex"
+    VECTOR_DB_TYPE: str = "postgresql" # "supabase", "pinecone", "milvus", "vertex", "postgresql"
     SUPABASE_URL: Optional[str] = None
     SUPABASE_SERVICE_KEY: Optional[str] = None
     

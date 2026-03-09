@@ -37,6 +37,7 @@ export const useChatStore = create<ChatState>((set) => ({
   isMuted: false,
   isRecording: false,
   currentEmotion: 'neutral',
+  criticalError: null,
   learningProgress: [
     { subject: 'Toán học', score: 85, total: 100 },
     { subject: 'Vật lý', score: 70, total: 100 },

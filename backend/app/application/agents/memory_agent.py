@@ -8,11 +8,11 @@ class MemoryAgent:
         self, 
         student_repo: IStudentRepository, 
         session_repo: ISessionRepository,
-        model_name: str = "gemini-2.0-flash"
+        model_name: str = "gemini-live-2.5-flash-native-audio"
     ):
         self.student_repo = student_repo
         self.session_repo = session_repo
-        self.model_name = f"gemini/{model_name}" if "/" not in model_name else model_name
+        self.model_name = model_name
         self.instruction = (
             "You are a Memory Specialist. Your role is to maintain and update the "
             "student's learning profile and provide context from previous sessions."

@@ -163,3 +163,25 @@ internal/engineering_log.md
 structer.md
 *.bak
 *.tmp
+
+# Sensitive files - DO NOT COMMIT
+.env
+.env.*
+*.key.json
+backend-key.json
+github-actions-key.json
+*-key.json
+*.pem
+*.p12
+*.crt
+*.cert
+*credentials*.json
+*service-account*.json
+frontend/.env.local
+frontend/.env.production
+
+# IDE
+.vscode/
+*.swp
+*.swo
+*~

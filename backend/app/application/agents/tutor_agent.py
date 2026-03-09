@@ -6,9 +6,9 @@ from app.application.tools.calculator import calculate
 from app.application.tools.knowledge_lookup import knowledge_lookup
 
 class TutorAgent:
-    # gemini-2.0-flash-001 phiên bản phù hợp cho hỗ trợ độ trễ thấp cho việc truyền phát trực tuyến theo thời gian thực
-    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash"):
-        self.model_name = f"gemini/{model_name}" if "/" not in model_name else model_name
+    # gemini-live-2.5-flash-native-audio phiên bản phù hợp cho hỗ trợ độ trễ thấp cho việc truyền phát trực tuyến theo thời gian thực
+    def __init__(self, model_name: str = "gemini-live-2.5-flash-native-audio"):
+        self.model_name = model_name
         self.instruction = (
             "Bạn là NovaTutor, một gia sư AI thân thiện và thông minh. "
             "Bạn giúp học sinh giải bài tập, giải thích các khái niệm phức tạp và "

@@ -42,3 +42,14 @@ class UsageRecord(BaseModel):
     tokens_used: int = 0
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class Session(BaseModel):
+    id: Optional[UUID] = None
+    student_id: UUID
+    subject: str
+    topic: str
+    duration_minutes: int
+    workspace_id: UUID
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+

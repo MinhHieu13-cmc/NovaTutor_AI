@@ -1,0 +1,213 @@
+name: Manual Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service to deploy'
+        required: true
+        type: choice
+        options:
+          - backend
+          - frontend
+          - both
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - production
+          - staging
+
+env:
+  PROJECT_ID: novatotorai-489214
+  REGION: us-central1
+  BACKEND_SERVICE: novatutor-backend
+  FRONTEND_SERVICE: novatutor-frontend
+  CLOUD_SQL_INSTANCE: novatutor-db
+
+jobs:
+  deploy-backend:
+    name: Deploy Backend
+    runs-on: ubuntu-latest
+    if: inputs.service == 'backend' || inputs.service == 'both'
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker gcr.io
+
+      - name: Build backend image
+        run: |
+          docker build -t gcr.io/${{ env.PROJECT_ID }}/${{ env.BACKEND_SERVICE }}:manual-${{ github.run_number }} \
+                       -t gcr.io/${{ env.PROJECT_ID }}/${{ env.BACKEND_SERVICE }}:latest \
+                       -f backend/Dockerfile backend
+
+      - name: Push backend image
+        run: |
+          docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.BACKEND_SERVICE }}:manual-${{ github.run_number }}
+          docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.BACKEND_SERVICE }}:latest
+
+      - name: Deploy backend to Cloud Run
+        run: |
+          CONN="${{ env.PROJECT_ID }}:${{ env.REGION }}:${{ env.CLOUD_SQL_INSTANCE }}"
+          DB_URL="postgresql+asyncpg://${{ secrets.DB_USER }}:${{ secrets.DB_PASS }}@/novatutor?host=/cloudsql/${CONN}"
+          
+          gcloud run deploy ${{ env.BACKEND_SERVICE }} \
+            --image=gcr.io/${{ env.PROJECT_ID }}/${{ env.BACKEND_SERVICE }}:manual-${{ github.run_number }} \
+            --platform=managed \
+            --region=${{ env.REGION }} \
+            --allow-unauthenticated \
+            --service-account=${{ secrets.BACKEND_SA_EMAIL }} \
+            --add-cloudsql-instances=${CONN} \
+            --set-env-vars="DATABASE_URL=${DB_URL},GCP_PROJECT_ID=${{ env.PROJECT_ID }},DEBUG=false" \
+            --memory=2Gi \
+            --cpu=2 \
+            --timeout=900
+
+      - name: Verify backend deployment
+        run: |
+          BACKEND_URL=$(gcloud run services describe ${{ env.BACKEND_SERVICE }} --region=${{ env.REGION }} --format='value(status.url)')
+          echo "✅ Backend deployed at: $BACKEND_URL"
+          
+          sleep 10
+          
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${BACKEND_URL}/docs)
+          if [ $STATUS -eq 200 ]; then
+            echo "✅ Backend health check passed"
+          else
+            echo "❌ Backend health check failed with status $STATUS"
+            exit 1
+          fi
+
+  deploy-frontend:
+    name: Deploy Frontend
+    runs-on: ubuntu-latest
+    needs: [deploy-backend]
+    if: |
+      always() && 
+      (inputs.service == 'frontend' || inputs.service == 'both') &&
+      (needs.deploy-backend.result == 'success' || needs.deploy-backend.result == 'skipped')
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker gcr.io
+
+      - name: Get backend URL
+        id: backend-url
+        run: |
+          URL=$(gcloud run services describe ${{ env.BACKEND_SERVICE }} --region=${{ env.REGION }} --format='value(status.url)')
+          echo "url=$URL" >> $GITHUB_OUTPUT
+
+      - name: Build frontend image
+        run: |
+          docker build -t gcr.io/${{ env.PROJECT_ID }}/${{ env.FRONTEND_SERVICE }}:manual-${{ github.run_number }} \
+                       -t gcr.io/${{ env.PROJECT_ID }}/${{ env.FRONTEND_SERVICE }}:latest \
+                       -f frontend/Dockerfile frontend
+
+      - name: Push frontend image
+        run: |
+          docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.FRONTEND_SERVICE }}:manual-${{ github.run_number }}
+          docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.FRONTEND_SERVICE }}:latest
+
+      - name: Deploy frontend to Cloud Run
+        run: |
+          BACKEND_URL="${{ steps.backend-url.outputs.url }}"
+          
+          gcloud run deploy ${{ env.FRONTEND_SERVICE }} \
+            --image=gcr.io/${{ env.PROJECT_ID }}/${{ env.FRONTEND_SERVICE }}:manual-${{ github.run_number }} \
+            --platform=managed \
+            --region=${{ env.REGION }} \
+            --allow-unauthenticated \
+            --set-env-vars="NEXT_PUBLIC_API_URL=${BACKEND_URL},NEXT_PUBLIC_GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" \
+            --memory=1Gi \
+            --cpu=1 \
+            --timeout=900
+
+      - name: Verify frontend deployment
+        run: |
+          FRONTEND_URL=$(gcloud run services describe ${{ env.FRONTEND_SERVICE }} --region=${{ env.REGION }} --format='value(status.url)')
+          echo "✅ Frontend deployed at: $FRONTEND_URL"
+          
+          sleep 10
+          
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${FRONTEND_URL})
+          if [ $STATUS -eq 200 ]; then
+            echo "✅ Frontend health check passed"
+          else
+            echo "❌ Frontend health check failed with status $STATUS"
+            exit 1
+          fi
+
+  deployment-summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [deploy-backend, deploy-frontend]
+    if: always()
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Print deployment summary
+        run: |
+          echo "🎉 Manual Deployment Summary"
+          echo ""
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Service(s): ${{ inputs.service }}"
+          echo ""
+          
+          if [[ "${{ inputs.service }}" == "backend" ]] || [[ "${{ inputs.service }}" == "both" ]]; then
+            BACKEND_URL=$(gcloud run services describe ${{ env.BACKEND_SERVICE }} --region=${{ env.REGION }} --format='value(status.url)')
+            echo "📊 Backend:  $BACKEND_URL"
+          fi
+          
+          if [[ "${{ inputs.service }}" == "frontend" ]] || [[ "${{ inputs.service }}" == "both" ]]; then
+            FRONTEND_URL=$(gcloud run services describe ${{ env.FRONTEND_SERVICE }} --region=${{ env.REGION }} --format='value(status.url)')
+            echo "📊 Frontend: $FRONTEND_URL"
+          fi
+

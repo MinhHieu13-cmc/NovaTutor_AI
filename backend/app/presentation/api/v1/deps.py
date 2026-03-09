@@ -1,7 +1,9 @@
 import os
+import vertexai
 from typing import Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from google.cloud import aiplatform
 from app.domain.models.core import User, UserRole
 from app.application.services.orchestrator import Orchestrator
 from app.application.services.rag_engine import RAGEngine
@@ -10,10 +12,20 @@ from app.domain.services.interfaces import (
     ILLMProvider, IEmbeddingProvider, IVectorStore, 
     ChatMessage, LLMResponse
 )
-# Mock imports for providers - in real app, these would be concrete implementations
-# from backend.app.infrastructure.external.openai_provider import OpenAIProvider
+from app.core.config import settings
 
 security = HTTPBearer()
+
+# Global Initialization for Vertex AI to avoid ADC errors in Agents
+os.environ["GOOGLE_API_KEY"] = settings.GOOGLE_API_KEY or ""
+aiplatform.init(
+    project=os.getenv("GCP_PROJECT_ID", "novatotorai-489214"),
+    location=os.getenv("GCP_LOCATION", "us-central1")
+)
+vertexai.init(
+    project=os.getenv("GCP_PROJECT_ID", "novatotorai-489214"),
+    location=os.getenv("GCP_LOCATION", "us-central1")
+)
 
 async def get_current_user(cred: HTTPAuthorizationCredentials = Depends(security)) -> User:
     # In production, verify JWT with Supabase/Auth0
@@ -26,33 +38,25 @@ async def get_current_user(cred: HTTPAuthorizationCredentials = Depends(security
         tenant_id="00000000-0000-0000-0000-000000000000"
     )
 
-from app.infrastructure.llm.litellm_provider import LiteLLMProvider
+from app.infrastructure.llm.vertexai_provider import VertexAIProvider
 from app.application.agents.tutor_agent import TutorAgent
 from app.application.agents.curriculum_agent import CurriculumAgent
 from app.application.agents.memory_agent import MemoryAgent
 from app.application.agents.assessment_agent import AssessmentAgent
 from app.application.agents.emotion_adapter import EmotionAdapter
 from app.application.services.tool_policy import ToolPolicyLayer
-from google.adk.models import LiteLlm
 from google.adk.models.registry import LLMRegistry
 
-# Đăng ký regex gemini/.* cho LiteLlm provider nếu chưa có
-try:
-    LLMRegistry._register('gemini/.*', LiteLlm)
-except Exception:
-    pass
-
 from app.infrastructure.persistence.repositories.cloud_sql_repository import CloudSQLStudentRepository
-from app.infrastructure.persistence.repositories.cloud_sql_repository import CloudSQLStudentRepository
-from app.infrastructure.persistence.repositories.firestore_session_repository import FirestoreSessionRepository
+from app.infrastructure.persistence.repositories.firestore_session_repository import CloudSQLSessionRepository
 from app.infrastructure.vector.vertex_ai_repository import VertexAIVectorRepository
-from app.core.config import settings
+from app.infrastructure.vector.postgresql_vector_store import PostgreSQLVectorStore
 
 def get_student_repository() -> CloudSQLStudentRepository:
     return CloudSQLStudentRepository(connection_string=settings.DATABASE_URL or "")
 
-def get_session_repository() -> FirestoreSessionRepository:
-    return FirestoreSessionRepository(project_id=settings.GCP_PROJECT_ID or "")
+def get_session_repository() -> CloudSQLSessionRepository:
+    return CloudSQLSessionRepository(connection_string=settings.DATABASE_URL or "")
 
 def get_vector_repository() -> VertexAIVectorRepository:
     return VertexAIVectorRepository(
@@ -61,11 +65,17 @@ def get_vector_repository() -> VertexAIVectorRepository:
     )
 
 def get_llm_provider() -> ILLMProvider:
-    # Default to LiteLLM for routing
-    return LiteLLMProvider(default_model=settings.LITELLM_MODEL)
+    # Use direct Vertex AI provider
+    return VertexAIProvider(
+        project_id=settings.GCP_PROJECT_ID or "",
+        location=settings.GCP_LOCATION,
+        default_model="gemini-live-2.5-flash-native-audio"
+    )
 
 def get_vector_store() -> IVectorStore:
-    if settings.VECTOR_DB_TYPE == "supabase":
+    if settings.VECTOR_DB_TYPE == "postgresql":
+        return PostgreSQLVectorStore(connection_string=settings.DATABASE_URL or "")
+    elif settings.VECTOR_DB_TYPE == "supabase":
         # return SupabaseVectorStore(...)
         pass
     elif settings.VECTOR_DB_TYPE == "pinecone":
@@ -99,7 +109,7 @@ def get_orchestrator(
 ) -> Orchestrator:
     plugin_registry = PluginRegistry() if settings.ENABLE_PLUGINS else None
     
-    tutor_agent = TutorAgent(api_key=settings.GOOGLE_API_KEY)
+    tutor_agent = TutorAgent()
     curriculum_agent = CurriculumAgent(vector_repo=vector_repo)
     memory_agent = MemoryAgent(student_repo=student_repo, session_repo=session_repo)
     assessment_agent = AssessmentAgent()

@@ -4,9 +4,9 @@ from google.adk.sessions import InMemorySessionService
 from app.domain.repositories.interfaces import IVectorRepository
 
 class CurriculumAgent:
-    def __init__(self, vector_repo: IVectorRepository, model_name: str = "gemini-2.0-flash"):
+    def __init__(self, vector_repo: IVectorRepository, model_name: str = "gemini-live-2.5-flash-native-audio"):
         self.vector_repo = vector_repo
-        self.model_name = f"gemini/{model_name}" if "/" not in model_name else model_name
+        self.model_name = model_name
         self.instruction = (
             "You are a Curriculum Expert. Your job is to find the most relevant "
             "educational content for the student's questions using the provided tools."

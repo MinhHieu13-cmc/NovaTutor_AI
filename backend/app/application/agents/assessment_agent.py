@@ -3,8 +3,8 @@ from google.adk import Agent, Runner
 from google.adk.sessions import InMemorySessionService
 
 class AssessmentAgent:
-    def __init__(self, model_name: str = "gemini-2.0-flash"):
-        self.model_name = f"gemini/{model_name}" if "/" not in model_name else model_name
+    def __init__(self, model_name: str = "gemini-live-2.5-flash-native-audio"):
+        self.model_name = model_name
         self.instruction = (
             "Bạn là AssessmentAgent, chuyên gia đánh giá câu trả lời của học sinh. "
             "Nhiệm vụ của bạn là phân tích câu trả lời của học sinh, xác định xem họ có hiểu bài không, "

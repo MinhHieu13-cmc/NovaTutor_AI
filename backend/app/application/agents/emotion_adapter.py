@@ -3,8 +3,8 @@ from google.adk import Agent, Runner
 from google.adk.sessions import InMemorySessionService
 
 class EmotionAdapter:
-    def __init__(self, model_name: str = "gemini-2.0-flash"):
-        self.model_name = f"gemini/{model_name}" if "/" not in model_name else model_name
+    def __init__(self, model_name: str = "gemini-live-2.5-flash-native-audio"):
+        self.model_name = model_name
         self.instruction = (
             "Bạn là EmotionAdapter. Nhiệm vụ của bạn là phân tích trạng thái cảm xúc của học sinh "
             "dựa trên tin nhắn của họ và đề xuất tông giọng phù hợp cho Gia sư AI (TutorAgent). "

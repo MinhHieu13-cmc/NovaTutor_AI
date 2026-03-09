@@ -9,18 +9,6 @@ from app.domain.models.core import User, Workspace
 
 router = APIRouter()
 
-from app.application.websocket.handler import websocket_handler
-from app.infrastructure.voice.processor import VoiceProcessor
-from fastapi import WebSocket
-
-@router.websocket("/ws/chat")
-async def websocket_chat(
-    websocket: WebSocket,
-    orchestrator: Orchestrator = Depends(get_orchestrator)
-):
-    voice_processor = VoiceProcessor(api_key=None) # Trong thực tế lấy từ config
-    await websocket_handler(websocket, orchestrator, voice_processor)
-
 @router.post("/chat/stream")
 async def chat_stream(
     messages: List[ChatMessage],
