@@ -16,16 +16,15 @@ from app.core.config import settings
 
 security = HTTPBearer()
 
-# Global Initialization for Vertex AI to avoid ADC errors in Agents
+# Global Initialization for Vertex AI – guarded so local Docker boots without ADC.
 os.environ["GOOGLE_API_KEY"] = settings.GOOGLE_API_KEY or ""
-aiplatform.init(
-    project=os.getenv("GCP_PROJECT_ID", "novatotorai-489214"),
-    location=os.getenv("GCP_LOCATION", "us-central1")
-)
-vertexai.init(
-    project=os.getenv("GCP_PROJECT_ID", "novatotorai-489214"),
-    location=os.getenv("GCP_LOCATION", "us-central1")
-)
+try:
+    _gcp_project = os.getenv("GCP_PROJECT_ID", "novatotorai-489214")
+    _gcp_location = os.getenv("GCP_LOCATION", "us-central1")
+    aiplatform.init(project=_gcp_project, location=_gcp_location)
+    vertexai.init(project=_gcp_project, location=_gcp_location)
+except Exception as _aip_exc:
+    print(f"[WARN] Vertex AI / aiplatform init skipped: {_aip_exc}")
 
 async def get_current_user(cred: HTTPAuthorizationCredentials = Depends(security)) -> User:
     # In production, verify JWT with Supabase/Auth0

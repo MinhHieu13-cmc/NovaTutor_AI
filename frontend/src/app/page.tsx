@@ -1,344 +1,309 @@
-'use client';
+"use client";
 
-import React, { useEffect, useState, Suspense, useRef } from 'react';
-import { Canvas } from '@react-three/fiber';
-import { OrbitControls, Environment, ContactShadows } from '@react-three/drei';
-import { useNovaTutorSocket } from '../hooks/useNovaTutorSocket';
-import { NovaAvatarView } from '../components/NovaAvatarView';
-import { useChatStore } from '../store/useChatStore';
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { authService, type User } from "@/services/authService";
 
-// Icons placeholders (using simple emoji or Lucide-like icons via SVG)
-const MicIcon = ({ muted }: { muted: boolean }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    {muted ? (
-      <>
-        <line x1="1" y1="1" x2="23" y2="23"></line>
-        <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path>
-        <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path>
-        <line x1="12" y1="19" x2="12" y2="23"></line>
-        <line x1="8" y1="23" x2="16" y2="23"></line>
-      </>
-    ) : (
-      <>
-        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
-        <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-        <line x1="12" y1="19" x2="12" y2="23"></line>
-        <line x1="8" y1="23" x2="16" y2="23"></line>
-      </>
-    )}
-  </svg>
-);
+const navItems = ["Explore", "Online Degrees", "Certificates", "Careers"];
 
-const RecordIcon = ({ active }: { active: boolean }) => (
-  <div className={`w-4 h-4 rounded-full ${active ? 'bg-red-500 animate-pulse' : 'bg-red-900/40'}`} />
-);
+const companies = ["Google", "IBM", "Meta", "Amazon", "Microsoft", "Salesforce"];
 
-const SendIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="22" y1="2" x2="11" y2="13"></line>
-    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-  </svg>
-);
+const featuredCourses = [
+  {
+    title: "Google Data Analytics Professional Certificate",
+    provider: "Google",
+    rating: "4.8",
+    students: "1.2M learners",
+    level: "Beginner",
+  },
+  {
+    title: "AI For Everyone",
+    provider: "DeepLearning.AI",
+    rating: "4.7",
+    students: "980K learners",
+    level: "Beginner",
+  },
+  {
+    title: "Full-Stack Web Development",
+    provider: "Meta",
+    rating: "4.9",
+    students: "640K learners",
+    level: "Intermediate",
+  },
+  {
+    title: "Project Management Foundations",
+    provider: "IBM",
+    rating: "4.8",
+    students: "530K learners",
+    level: "Intermediate",
+  },
+];
 
-export default function Home() {
-  const { connect, disconnect, sendMessage, startRecording, stopRecording, currentViseme, isConnected, isRecording, isSpeaking, currentEmotion, transcript, debugInfo, error } = useNovaTutorSocket();
-  const {
-    messages, 
-    isSpeaking: speakingState,
-    currentEmotion: emotionState,
-    isMuted,
-    isRecording: recordingState,
-    criticalError,
-    learningProgress,
-    setMuted,
-    setRecording,
-    addMessage,
-    setEmotion,
-    setSpeaking
-  } = useChatStore();
+const categories = [
+  "Data Science",
+  "AI & Machine Learning",
+  "Programming",
+  "Business",
+  "Marketing",
+  "Design",
+];
 
-  const [inputValue, setInputValue] = useState('');
-  const chatEndRef = useRef<HTMLDivElement>(null);
+const testimonials = [
+  {
+    name: "Lina M.",
+    role: "Product Designer",
+    text: "The guided path helped me switch careers in under 8 months.",
+  },
+  {
+    name: "Arun K.",
+    role: "Software Engineer",
+    text: "The projects are practical and easy to fit into my weekly routine.",
+  },
+  {
+    name: "Sophie T.",
+    role: "Business Analyst",
+    text: "Clear lessons, trusted instructors, and great certificate quality.",
+  },
+];
+
+export default function HomePage() {
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
 
   useEffect(() => {
-    // Don't auto-connect, let user start manually
+    setCurrentUser(authService.getUser());
   }, []);
 
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  const handleSend = () => {
-    if (inputValue.trim()) {
-      const userMsg = { role: 'user' as const, content: inputValue };
-      addMessage(userMsg);
-      sendMessage({ text: inputValue });
-      setInputValue('');
-    }
-  };
-
-  const toggleVoiceChat = async () => {
-    if (isConnected) {
-      disconnect();
-    } else {
-      await connect();
-    }
-  };
-
-  const toggleRecording = () => {
-    if (isRecording) {
-      stopRecording();
-    } else {
-      startRecording();
-    }
-    setRecording(!isRecording);
-  };
-
-  const getEmotionEmoji = (emotion: string) => {
-    switch (emotion.toLowerCase()) {
-      case 'happy': return '😊';
-      case 'confused': return '🤔';
-      case 'excited': return '🤩';
-      case 'sad': return '😢';
-      case 'angry': return '😠';
-      default: return '😐';
-    }
-  };
-
   return (
-    <main className={`flex h-screen flex-col bg-slate-950 text-slate-100 font-sans overflow-hidden transition-all duration-300 ${criticalError ? 'animate-border-flash' : ''}`}>
+    <main className="min-h-screen bg-white text-slate-900">
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex w-full max-w-7xl items-center gap-4 px-4 py-4 md:px-6">
+          <Link href="/" className="text-xl font-bold text-[#2A73FF]">
+            NovaTutor
+          </Link>
 
-      {/* Main Layout: 60/40 Split */}
-      <div className="flex flex-1 overflow-hidden">
-        
-        {/* Left Section (60%): 3D Viewport */}
-        <section className="relative w-[60%] h-full bg-slate-900 overflow-hidden border-r border-slate-800">
-
-          {/* Top Overlay: Emotion & Status */}
-          <div className="absolute top-6 left-6 z-20 flex items-center gap-4">
-            <div className="bg-slate-800/80 backdrop-blur-md px-4 py-2 rounded-2xl border border-slate-700/50 shadow-xl flex items-center gap-3">
-              <span className="text-2xl" title={`Cảm xúc: ${currentEmotion}`}>
-                {getEmotionEmoji(currentEmotion)}
-              </span>
-              <div className="flex flex-col">
-                <span className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Trạng thái</span>
-                <span className="text-sm font-medium capitalize">{currentEmotion}</span>
-              </div>
-            </div>
-
-            <a href="/test-animations" className="bg-slate-800/80 backdrop-blur-md px-4 py-2 rounded-2xl border border-slate-700/50 shadow-xl flex items-center gap-2 hover:bg-slate-700 transition-colors text-[10px] uppercase tracking-widest font-bold text-slate-400">
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
-              Test Actions
-            </a>
-
-            <div className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 ${isConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'}`}>
-              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-              {isConnected ? 'Hệ thống trực tuyến' : 'Mất kết nối'}
-            </div>
+          <div className="hidden flex-1 md:block">
+            <input
+              type="text"
+              placeholder="Search for courses, skills, universities"
+              className="w-full rounded-full border border-slate-300 px-5 py-2.5 text-sm outline-none transition focus:border-[#2A73FF] focus:ring-2 focus:ring-blue-100"
+            />
           </div>
 
-          {/* 3D Canvas */}
-          <div className="w-full h-full cursor-grab active:cursor-grabbing">
-            <Canvas camera={{ position: [0, 1.70, 1.2], fov: 35 }}>
-              <Suspense fallback={null}>
-                <Environment preset="city" />
-                <ambientLight intensity={0.5} />
-                <spotLight position={[5, 5, 5]} angle={0.15} penumbra={1} intensity={1} />
-                <pointLight position={[-5, 5, -5]} intensity={0.5} />
-                
-                <NovaAvatarView 
-                  modelPath="/models/avaturn_model.glb"
-                  blendshapes={currentViseme}
-                  currentEmotion={currentEmotion}
-                  isSpeaking={isSpeaking}
-                  rotationY={0.49} // Đã chỉnh 0.49 theo quan sát của bạn cho trạng thái Idle
-                />
-                
-                <ContactShadows 
-                  opacity={0.4} 
-                  scale={10} 
-                  blur={2.5} 
-                  far={1.6} 
-                  resolution={256} 
-                  color="#000000" 
-                />
-                <OrbitControls 
-                  target={[0, 1.70, 0]} 
-                  minPolarAngle={Math.PI / 2.5} 
-                  maxPolarAngle={Math.PI / 1.8}
-                  enableZoom={false}
-                  enablePan={false}
-                />
-              </Suspense>
-            </Canvas>
-          </div>
+          <nav className="hidden items-center gap-5 text-sm text-slate-700 lg:flex">
+            {navItems.map((item) => (
+              <a key={item} href="#" className="transition hover:text-[#2A73FF]">
+                {item}
+              </a>
+            ))}
+          </nav>
 
-          {/* Critical Error Alert */}
-          {criticalError && (
-            <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-30 bg-rose-600 text-white px-6 py-3 rounded-xl shadow-2xl animate-bounce flex items-center gap-3">
-              <span className="text-xl">⚠️</span>
-              <div className="flex flex-col">
-                <span className="text-[10px] font-bold uppercase">Cảnh báo hệ thống</span>
-                <span className="text-sm font-medium">{criticalError}</span>
-              </div>
-            </div>
-          )}
-
-          {/* Speaking Indicator */}
-          {isSpeaking && (
-            <div className="absolute bottom-10 left-10 z-20 flex items-center gap-3 bg-blue-600/20 backdrop-blur-sm border border-blue-500/30 px-4 py-2 rounded-full shadow-lg">
-              <div className="flex gap-1 h-3 items-end">
-                {[...Array(4)].map((_, i) => (
-                  <div key={i} className="w-1 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: `${i * 0.1}s`, height: `${30 + Math.random() * 70}%` }} />
-                ))}
-              </div>
-              <span className="text-xs font-bold text-blue-300 uppercase tracking-widest">Gia sư đang trả lời...</span>
-            </div>
-          )}
-        </section>
-
-        {/* Right Section (40%): Sidebar */}
-        <aside className="w-[40%] flex flex-col bg-slate-900/50 backdrop-blur-md h-full">
-          
-          {/* Progress Section */}
-          <div className="p-6 border-b border-slate-800">
-            <h2 className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500 mb-6">Learning Progress</h2>
-            <div className="space-y-5">
-              {learningProgress.map((item, idx) => (
-                <div key={idx} className="space-y-2">
-                  <div className="flex justify-between text-xs font-medium">
-                    <span className="text-slate-300">{item.subject}</span>
-                    <span className="text-blue-400 font-bold">{Math.round((item.score / item.total) * 100)}%</span>
-                  </div>
-                  <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-gradient-to-r from-blue-600 to-indigo-500 transition-all duration-1000 ease-out"
-                      style={{ width: `${(item.score / item.total) * 100}%` }}
-                    />
-                  </div>
+          <div className="ml-auto flex items-center gap-2">
+            {currentUser ? (
+              <details className="relative">
+                <summary className="list-none cursor-pointer rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                  {currentUser.full_name}
+                </summary>
+                <div className="absolute right-0 mt-2 w-44 rounded-xl border border-slate-200 bg-white p-2 text-sm shadow-md">
+                  <Link
+                    href={currentUser.role === "teacher" ? "/teacher" : "/student"}
+                    className="block w-full rounded-lg px-2 py-2 text-left hover:bg-slate-50"
+                  >
+                    Dashboard
+                  </Link>
+                  <button
+                    onClick={() => {
+                      authService.logout(false);
+                      setCurrentUser(null);
+                    }}
+                    className="w-full rounded-lg px-2 py-2 text-left text-red-600 hover:bg-red-50"
+                  >
+                    Logout
+                  </button>
                 </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Transcript & Debug Info Section */}
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center">
-              <h2 className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Transcript & Debug Info</h2>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-hide">
-              <div className="bg-slate-800/50 rounded-2xl p-4 border border-slate-700/50">
-                <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3">Transcript</h3>
-                <div className="text-sm text-slate-200 whitespace-pre-wrap max-h-64 overflow-y-auto">
-                  {transcript || "Start speaking to see the conversation here..."}
-                </div>
-              </div>
-              {debugInfo && (
-                <div className="bg-slate-800/50 rounded-2xl p-4 border border-slate-700/50">
-                  <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3">Debug Info</h3>
-                  <div className="text-xs text-slate-400 font-mono">
-                    {debugInfo}
-                  </div>
-                </div>
-              )}
-              {error && (
-                <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-4">
-                  <h3 className="text-xs font-bold uppercase tracking-widest text-red-400 mb-3">Error</h3>
-                  <div className="text-sm text-red-300">
-                    {error}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </aside>
-      </div>
-
-      {/* Bottom Control Bar */}
-      <footer className="h-24 bg-slate-950 border-t border-slate-800 px-8 flex items-center gap-6 z-40">
-
-        {/* Interaction Controls */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={toggleVoiceChat}
-            className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${
-              isConnected
-              ? 'bg-emerald-500 text-black shadow-emerald-500/40'
-              : 'bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700'
-            }`}
-            title={isConnected ? 'Dừng voice chat' : 'Bắt đầu voice chat'}
-          >
-            {isConnected ? (
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="2" y="2" width="20" height="20" rx="2" ry="2"/>
-                <line x1="9" y1="9" x2="15" y2="15"/>
-                <line x1="15" y1="9" x2="9" y2="15"/>
-              </svg>
+              </details>
             ) : (
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polygon points="23 7 16 12 23 17 23 7"/>
-                <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-              </svg>
+              <>
+                <Link href="/auth?mode=login" className="rounded-lg px-3 py-2 text-sm font-medium text-[#2A73FF] transition hover:bg-blue-50">
+                  Sign In
+                </Link>
+                <Link href="/auth?mode=register" className="rounded-lg bg-[#2A73FF] px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700">
+                  Join for Free
+                </Link>
+              </>
             )}
-          </button>
-
-          <button
-            onClick={() => setMuted(!isMuted)}
-            className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${
-              isMuted 
-              ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' 
-              : 'bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700'
-            }`}
-            title={isMuted ? 'Bật mic' : 'Tắt mic'}
-          >
-            <MicIcon muted={isMuted} />
-          </button>
-
-          <button 
-            onClick={toggleRecording}
-            className={`w-12 h-12 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all border ${
-              isRecording 
-              ? 'bg-red-500/10 border-red-500/30 shadow-[0_0_15px_rgba(239,68,68,0.2)]' 
-              : 'bg-slate-800 border-slate-700 hover:bg-slate-700'
-            } ${isSpeaking && isRecording ? 'animate-pulse-red' : ''}`}
-            title={isRecording ? 'Dừng ghi âm' : 'Bắt đầu ghi âm'}
-          >
-            <RecordIcon active={isRecording} />
-            <span className="text-[8px] font-bold uppercase tracking-tighter text-red-500/80">Rec</span>
-          </button>
+          </div>
         </div>
+      </header>
 
-        {/* Text Input */}
-        <div className="flex-1 relative">
-          <input 
+      <section className="mx-auto grid w-full max-w-7xl gap-10 px-4 py-16 md:grid-cols-2 md:px-6">
+        <div>
+          <p className="mb-3 inline-flex rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-[#2A73FF]">
+            Learn from top universities and companies
+          </p>
+          <h1 className="mb-4 text-4xl font-bold leading-tight md:text-5xl">Learn without limits</h1>
+          <p className="mb-7 text-lg text-slate-600">
+            Build new skills with flexible online courses, certificates, and guided projects designed for real careers.
+          </p>
+          <div className="mb-6 flex flex-wrap gap-3">
+            <Link href="/auth?mode=register" className="rounded-xl bg-[#2A73FF] px-5 py-3 font-semibold text-white transition hover:bg-blue-700">
+              Join for Free
+            </Link>
+            <a href="#courses" className="rounded-xl border border-slate-300 px-5 py-3 font-semibold text-slate-800 transition hover:bg-slate-50">
+              Explore Courses
+            </a>
+          </div>
+          <input
             type="text"
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="Nhập tin nhắn hoặc câu hỏi cho NovaTutor..."
-            className="w-full bg-slate-900 border border-slate-800 rounded-2xl px-6 py-4 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all placeholder:text-slate-600"
+            placeholder="Search courses, skills, topics"
+            className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-[#2A73FF] focus:ring-2 focus:ring-blue-100"
           />
-          <button 
-            onClick={handleSend}
-            disabled={!inputValue.trim()}
-            className="absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:hover:bg-blue-600 text-white rounded-xl flex items-center justify-center transition-all shadow-lg"
-          >
-            <SendIcon />
-          </button>
         </div>
 
-        {/* Shortcut Info */}
-        <div className="hidden xl:flex flex-col items-end gap-1 opacity-40">
-          <div className="flex items-center gap-2">
-            <kbd className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-[10px]">Enter</kbd>
-            <span className="text-[10px]">Gửi nhanh</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <kbd className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-[10px]">Space</kbd>
-            <span className="text-[10px]">Ghi âm</span>
+        <div className="rounded-3xl border border-slate-200 bg-gradient-to-br from-blue-50 to-indigo-50 p-8 shadow-sm">
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div className="rounded-2xl bg-white p-4 shadow-sm">
+              <p className="text-slate-500">Students</p>
+              <p className="mt-1 text-2xl font-bold">2M+</p>
+            </div>
+            <div className="rounded-2xl bg-white p-4 shadow-sm">
+              <p className="text-slate-500">Courses</p>
+              <p className="mt-1 text-2xl font-bold">7,500+</p>
+            </div>
+            <div className="rounded-2xl bg-white p-4 shadow-sm">
+              <p className="text-slate-500">Partners</p>
+              <p className="mt-1 text-2xl font-bold">300+</p>
+            </div>
+            <div className="rounded-2xl bg-white p-4 shadow-sm">
+              <p className="text-slate-500">Career Tracks</p>
+              <p className="mt-1 text-2xl font-bold">120+</p>
+            </div>
           </div>
         </div>
+      </section>
+
+      <section className="border-y border-slate-200 bg-slate-50">
+        <div className="mx-auto w-full max-w-7xl px-4 py-8 md:px-6">
+          <p className="mb-4 text-center text-sm font-medium text-slate-600">Trusted by teams at</p>
+          <div className="grid grid-cols-2 gap-4 text-center text-sm font-semibold text-slate-600 md:grid-cols-6">
+            {companies.map((company) => (
+              <div key={company} className="rounded-lg border border-slate-200 bg-white px-4 py-3">
+                {company}
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section id="courses" className="mx-auto w-full max-w-7xl px-4 py-14 md:px-6">
+        <div className="mb-7 flex items-end justify-between">
+          <h2 className="text-2xl font-bold">Featured Courses</h2>
+          <a href="#" className="text-sm font-medium text-[#2A73FF]">View all</a>
+        </div>
+        <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
+          {featuredCourses.map((course) => (
+            <article key={course.title} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:-translate-y-1 hover:shadow-md">
+              <div className="mb-4 h-28 rounded-xl bg-slate-100" />
+              <h3 className="mb-2 text-sm font-semibold leading-6">{course.title}</h3>
+              <p className="text-sm text-slate-500">{course.provider}</p>
+              <p className="mt-2 text-sm">{course.rating} ★</p>
+              <p className="text-sm text-slate-500">{course.students}</p>
+              <span className="mt-3 inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-[#2A73FF]">{course.level}</span>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="mx-auto w-full max-w-7xl px-4 py-6 md:px-6">
+        <h2 className="mb-6 text-2xl font-bold">Browse Categories</h2>
+        <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
+          {categories.map((category) => (
+            <div key={category} className="rounded-xl border border-slate-200 bg-white px-4 py-5 text-sm font-medium shadow-sm transition hover:border-[#2A73FF] hover:text-[#2A73FF]">
+              {category}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="mx-auto w-full max-w-7xl px-4 py-14 md:px-6">
+        <h2 className="mb-6 text-2xl font-bold">Career Certificates</h2>
+        <div className="grid gap-5 md:grid-cols-2">
+          {["Google UX Design", "IBM Data Science"].map((program) => (
+            <div key={program} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <p className="text-sm text-slate-500">Professional Certificate</p>
+              <h3 className="mt-2 text-xl font-semibold">{program}</h3>
+              <p className="mt-2 text-slate-600">Job-ready program with hands-on projects and career support.</p>
+              <a href="#" className="mt-4 inline-block text-sm font-semibold text-[#2A73FF]">View Programs</a>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="mx-auto w-full max-w-7xl px-4 py-2 md:px-6">
+        <h2 className="mb-6 text-2xl font-bold">Learning Path</h2>
+        <div className="grid gap-4 md:grid-cols-3">
+          {["Beginner", "Intermediate", "Advanced"].map((step, index) => (
+            <div key={step} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wider text-[#2A73FF]">Step {index + 1}</p>
+              <h3 className="mt-1 text-lg font-semibold">{step}</h3>
+              <p className="mt-2 text-sm text-slate-600">Structured projects and assessments to unlock the next stage.</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="mx-auto w-full max-w-7xl px-4 py-14 md:px-6">
+        <h2 className="mb-6 text-2xl font-bold">Testimonials</h2>
+        <div className="grid gap-4 md:grid-cols-3">
+          {testimonials.map((item) => (
+            <article key={item.name} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <p className="mb-3 text-sm text-amber-500">★★★★★</p>
+              <p className="text-sm text-slate-700">"{item.text}"</p>
+              <p className="mt-4 text-sm font-semibold">{item.name}</p>
+              <p className="text-xs text-slate-500">{item.role}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="mx-auto w-full max-w-7xl px-4 pb-14 md:px-6">
+        <div className="rounded-3xl bg-[#2A73FF] px-6 py-10 text-center text-white shadow-sm">
+          <h2 className="text-3xl font-bold">Start learning today</h2>
+          <p className="mt-2 text-blue-100">Join millions of learners building skills with flexible online education.</p>
+          <Link href="/auth?mode=register" className="mt-6 inline-block rounded-xl bg-white px-6 py-3 font-semibold text-[#2A73FF] transition hover:bg-blue-50">
+            Join for Free
+          </Link>
+        </div>
+      </section>
+
+      <footer className="border-t border-slate-200 bg-slate-50">
+        <div className="mx-auto grid w-full max-w-7xl gap-8 px-4 py-10 text-sm text-slate-600 md:grid-cols-5 md:px-6">
+          <div>
+            <p className="mb-3 font-semibold text-slate-900">Coursera</p>
+            <p>About</p>
+            <p>What We Offer</p>
+          </div>
+          <div>
+            <p className="mb-3 font-semibold text-slate-900">Community</p>
+            <p>Learners</p>
+            <p>Partners</p>
+          </div>
+          <div>
+            <p className="mb-3 font-semibold text-slate-900">More</p>
+            <p>Press</p>
+            <p>Investors</p>
+          </div>
+          <div>
+            <p className="mb-3 font-semibold text-slate-900">Mobile App</p>
+            <p>iOS App</p>
+            <p>Android App</p>
+          </div>
+          <div>
+            <p className="mb-3 font-semibold text-slate-900">Follow Us</p>
+            <p>LinkedIn</p>
+            <p>YouTube</p>
+          </div>
+        </div>
+        <p className="border-t border-slate-200 py-4 text-center text-xs text-slate-500">© 2026 NovaTutor, Inc. All rights reserved.</p>
       </footer>
     </main>
   );

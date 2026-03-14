@@ -1,281 +1,387 @@
 'use client';
 
-import React, { useState, Suspense } from 'react';
-import { Canvas } from '@react-three/fiber';
-import { OrbitControls, Environment, ContactShadows } from '@react-three/drei';
-import { NovaAvatarView } from '@/components/NovaAvatarView';
-import { motion, AnimatePresence } from 'framer-motion';
-import { useSearchParams, useRouter } from 'next/navigation';
+import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { authService } from '@/services/authService';
 
-const containerVariants = {
-  hidden: { opacity: 0 },
-  visible: { opacity: 1, transition: { duration: 0.5 } },
-  exit: { opacity: 0, transition: { duration: 0.3 } },
+declare global {
+  interface Window {
+    google?: any;
+  }
+}
+
+type Role = 'student' | 'teacher';
+type Mode = 'login' | 'register';
+
+type FieldErrors = {
+  fullName?: string;
+  email?: string;
+  password?: string;
 };
 
-const formVariants = {
-  hidden: { x: 100, opacity: 0 },
-  visible: { x: 0, opacity: 1, transition: { duration: 0.4 } },
-  exit: { x: -100, opacity: 0, transition: { duration: 0.3 } },
+const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const isPasswordValid = (value: string) => {
+  const hasLetters = /[A-Za-z]/.test(value);
+  const hasNumbers = /\d/.test(value);
+  return value.length >= 8 && hasLetters && hasNumbers;
 };
 
-function AuthPageContent() {
+const inputClass =
+  'w-full rounded-xl border bg-white py-3 pl-10 pr-4 text-sm text-slate-900 outline-none transition focus:border-[#2A73FF] focus:ring-2 focus:ring-blue-100';
+
+const iconClass = 'absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400';
+
+const FieldIcon = ({ type }: { type: 'user' | 'email' | 'lock' }) => {
+  if (type === 'user') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={iconClass}>
+        <path d="M12 12c2.76 0 5-2.24 5-5S14.76 2 12 2 7 4.24 7 7s2.24 5 5 5Z" stroke="currentColor" strokeWidth="1.8" />
+        <path d="M4 20a8 8 0 0 1 16 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
+  if (type === 'email') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={iconClass}>
+        <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.8" />
+        <path d="m4 7 8 6 8-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={iconClass}>
+      <rect x="5" y="10" width="14" height="10" rx="2" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M8 10V8a4 4 0 1 1 8 0v2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+};
+
+function AuthContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const mode = searchParams.get('mode') || 'login';
+  const mode = (searchParams.get('mode') || 'login') as Mode;
 
-  const [role, setRole] = useState<'student' | 'teacher'>('student');
+  const [role, setRole] = useState<Role>('student');
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [fullName, setFullName] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [avatarEmotion, setAvatarEmotion] = useState<'curious' | 'happy' | 'confused' | 'neutral'>('curious');
+  const [rememberMe, setRememberMe] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [serverError, setServerError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [googleReady, setGoogleReady] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState(false);
 
-  const isStudent = role === 'student';
+  const passwordRuleText = useMemo(() => {
+    if (!password) return 'At least 8 characters, include letters and numbers.';
+    return isPasswordValid(password)
+      ? 'Strong password format.'
+      : 'Password must be 8+ chars and include letters and numbers.';
+  }, [password]);
 
-  const handleRegister = async () => {
-    setIsLoading(true);
-    setError('');
-    setAvatarEmotion('curious');
+  useEffect(() => {
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+    if (!clientId) return;
+
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = () => setGoogleReady(true);
+    document.body.appendChild(script);
+
+    return () => {
+      if (document.body.contains(script)) document.body.removeChild(script);
+    };
+  }, []);
+
+  useEffect(() => {
+    const nextErrors: FieldErrors = {};
+
+    if (mode === 'register' && fullName.trim().length < 2) {
+      nextErrors.fullName = 'Please enter your full name.';
+    }
+
+    if (!emailRegex.test(email.trim())) {
+      nextErrors.email = 'Please enter a valid email address.';
+    }
+
+    if (!password) {
+      nextErrors.password = 'Please enter your password.';
+    } else if (mode === 'register' && !isPasswordValid(password)) {
+      nextErrors.password = 'At least 8 characters with letters and numbers.';
+    }
+
+    setErrors(nextErrors);
+  }, [mode, fullName, email, password]);
+
+  const navigateByRole = (userRole: Role) => {
+    router.push(userRole === 'teacher' ? '/teacher' : '/student');
+  };
+
+  const handleAuth = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (Object.keys(errors).length > 0) {
+      setServerError('Please fix the highlighted fields before continuing.');
+      return;
+    }
+
+    setSubmitting(true);
+    setServerError('');
 
     try {
-      const response = await authService.register({ email, password, full_name: fullName, role });
+      if (mode === 'register') {
+        const res = await authService.register({
+          email: email.trim(),
+          password,
+          full_name: fullName.trim(),
+          role,
+        });
+        navigateByRole(res.user.role as Role);
+      } else {
+        const res = await authService.login({ email: email.trim(), password });
 
-      setAvatarEmotion('happy');
-      setTimeout(() => {
-        router.push(role === 'teacher' ? '/teacher' : '/student');
-      }, 1500);
-    } catch (err: any) {
-      setAvatarEmotion('confused');
-      setError(err.message || 'Registration failed. Please try again.');
+        if (rememberMe) {
+          localStorage.setItem('novatutor_last_email', email.trim());
+        } else {
+          localStorage.removeItem('novatutor_last_email');
+        }
+
+        navigateByRole(res.user.role as Role);
+      }
+    } catch (e: any) {
+      setServerError(e?.message || 'Authentication failed. Please try again.');
     } finally {
-      setIsLoading(false);
+      setSubmitting(false);
     }
   };
 
-  const handleLogin = async () => {
-    setIsLoading(true);
-    setError('');
-    setAvatarEmotion('curious');
+  const handleGoogleLogin = async () => {
+    if (googleBusy) return;
+
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+    if (!clientId || !window.google) {
+      setServerError('Google Sign-In is not ready. Please configure NEXT_PUBLIC_GOOGLE_CLIENT_ID.');
+      return;
+    }
+
+    setGoogleBusy(true);
+
+    window.google.accounts.id.initialize({
+      client_id: clientId,
+      callback: async (response: any) => {
+        try {
+          setSubmitting(true);
+          setServerError('');
+          const res = await authService.googleAuth(response.credential);
+          navigateByRole(res.user.role as Role);
+        } catch (e: any) {
+          setServerError(e?.message || 'Google sign in failed.');
+        } finally {
+          setSubmitting(false);
+          setGoogleBusy(false);
+        }
+      },
+    });
 
     try {
-      const data = await authService.login({ email, password });
-
-      setAvatarEmotion('happy');
-      setTimeout(() => {
-        router.push(data.user.role === 'teacher' ? '/teacher' : '/student');
-      }, 1500);
-    } catch (err: any) {
-      setAvatarEmotion('confused');
-      setError(err.message || 'Login failed. Please check your credentials.');
-    } finally {
-      setIsLoading(false);
+      window.google.accounts.id.prompt((notification: any) => {
+        if (
+          notification?.isNotDisplayed?.() ||
+          notification?.isSkippedMoment?.() ||
+          notification?.isDismissedMoment?.()
+        ) {
+          setGoogleBusy(false);
+        }
+      });
+    } catch {
+      setGoogleBusy(false);
     }
   };
 
-  const handleGoogleAuth = async () => {
-    // Implementation for Google OAuth would go here
-    console.log('Google auth clicked');
+  const handlePlaceholderSocial = (provider: 'Facebook' | 'Apple') => {
+    setServerError(`${provider} login will be available soon.`);
   };
 
   return (
-    <main className={`w-full min-h-screen flex overflow-hidden transition-all duration-500 ${
-      isStudent
-        ? 'bg-gradient-to-br from-slate-950 via-blue-950 to-slate-950'
-        : 'bg-gradient-to-br from-slate-950 via-purple-950 to-slate-950'
-    }`}>
-      {/* Left: Avatar Stage */}
-      <div className="hidden md:flex w-1/2 items-center justify-center relative overflow-hidden">
-        <div className="absolute inset-0">
-          {/* Particle Effects */}
-          {[...Array(10)].map((_, i) => (
-            <motion.div
-              key={i}
-              className={`absolute w-2 h-2 rounded-full ${isStudent ? 'bg-blue-400' : 'bg-purple-400'}`}
-              animate={{
-                x: [Math.random() * 500, Math.random() * 500],
-                y: [Math.random() * 500, Math.random() * 500],
-                opacity: [0, 1, 0],
-              }}
-              transition={{ duration: Math.random() * 8 + 8, repeat: Infinity }}
-            />
-          ))}
-        </div>
-
-        <div className="relative z-10 w-96 h-96">
-          <Canvas camera={{ position: [0, 1.70, 1.2], fov: 35 }}>
-            <Suspense fallback={null}>
-              <Environment preset="city" />
-              <ambientLight intensity={0.5} />
-              <spotLight position={[5, 5, 5]} angle={0.15} penumbra={1} intensity={1} />
-              <NovaAvatarView
-                modelPath="/models/avaturn_model.glb"
-                blendshapes={{}}
-                currentEmotion={avatarEmotion}
-                isSpeaking={false}
-                rotationY={0.49}
-              />
-              <ContactShadows opacity={0.4} scale={10} blur={2.5} far={1.6} resolution={256} color="#000000" />
-              <OrbitControls target={[0, 1.70, 0]} minPolarAngle={Math.PI / 2.5} maxPolarAngle={Math.PI / 1.8} enableZoom={false} enablePan={false} />
-            </Suspense>
-          </Canvas>
-        </div>
-
-        {/* Welcome Text */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.5 }}
-          className="absolute bottom-10 left-6 right-6 backdrop-blur-md bg-white/5 border border-white/10 rounded-2xl p-6 text-center"
+    <main className="min-h-screen bg-white px-4 py-8 text-slate-900 md:px-6 md:py-12">
+      <div className="mx-auto mb-4 w-full max-w-6xl">
+        <Link
+          href="/"
+          className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
         >
-          <p className="text-sm text-slate-300 mb-2">Chào bạn! Tôi là NovaTutor</p>
-          <p className="text-xs text-slate-400">Hãy cho tôi biết về bạn để chúng ta bắt đầu</p>
-        </motion.div>
+          ← Back to Home
+        </Link>
       </div>
 
-      {/* Right: Auth Form */}
-      <div className={`w-full md:w-1/2 flex items-center justify-center p-6 relative`}>
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.5 }}
-          className="w-full max-w-md"
-        >
-          {/* Role Selector */}
-          <div className="mb-8 flex gap-4 justify-center">
-            {(['student', 'teacher'] as const).map((r) => (
-              <motion.button
-                key={r}
-                onClick={() => { setRole(r); setAvatarEmotion('curious'); setError(''); }}
-                className={`px-6 py-2 rounded-lg font-bold transition-all ${
-                  role === r
-                    ? isStudent
-                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/50'
-                      : 'bg-purple-600 text-white shadow-lg shadow-purple-500/50'
-                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                }`}
-              >
-                {r === 'student' ? '🎓 Học sinh' : '👨‍🏫 Giảng viên'}
-              </motion.button>
-            ))}
+      <div className="mx-auto grid w-full max-w-6xl items-stretch gap-8 lg:grid-cols-2">
+        <section className="hidden rounded-3xl border border-slate-200 bg-gradient-to-br from-blue-50 to-indigo-50 p-8 shadow-sm lg:flex lg:flex-col lg:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#2A73FF]">NovaTutor</p>
+            <h1 className="mt-4 text-4xl font-bold leading-tight">Learn from top universities and companies</h1>
+            <p className="mt-3 text-slate-600">Flexible online learning for students and educators, in one modern platform.</p>
           </div>
 
-          {/* Form Container */}
-          <AnimatePresence mode="wait">
-            {mode === 'login' ? (
-              <motion.div key="login" variants={formVariants} initial="hidden" animate="visible" exit="exit">
-                <div className="backdrop-blur-md bg-white/10 border border-white/20 rounded-3xl p-8 space-y-6">
-                  <h2 className="text-2xl font-bold">Đăng nhập</h2>
+          <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p className="text-sm font-semibold text-slate-800">Online Learning Illustration</p>
+            <div className="mt-4 grid grid-cols-3 gap-3">
+              <div className="h-16 rounded-xl bg-blue-100" />
+              <div className="h-16 rounded-xl bg-indigo-100" />
+              <div className="h-16 rounded-xl bg-cyan-100" />
+            </div>
+            <p className="mt-3 text-sm text-slate-500">Student, laptop, books, certificates, and graduation icons style.</p>
+          </div>
+        </section>
 
-                  <div className="space-y-4">
-                    <input
-                      type="email"
-                      placeholder="Email của bạn"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:border-blue-400 transition-colors"
-                    />
-                    <input
-                      type="password"
-                      placeholder="Mật khẩu"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:border-blue-400 transition-colors"
-                    />
-                  </div>
+        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
+          <div className="mb-6 flex rounded-xl bg-slate-100 p-1">
+            <button
+              onClick={() => setRole('student')}
+              className={`flex-1 rounded-lg py-2 text-sm font-medium transition ${role === 'student' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`}
+            >
+              Student
+            </button>
+            <button
+              onClick={() => setRole('teacher')}
+              className={`flex-1 rounded-lg py-2 text-sm font-medium transition ${role === 'teacher' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`}
+            >
+              Teacher
+            </button>
+          </div>
 
-                  {error && <p className="text-red-400 text-sm">{error}</p>}
+          <h2 className="text-3xl font-bold">{mode === 'login' ? 'Log in to your account' : 'Join for free'}</h2>
 
-                  <button
-                    onClick={handleLogin}
-                    disabled={isLoading}
-                    className={`w-full py-3 rounded-lg font-bold transition-all ${
-                      isStudent
-                        ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                        : 'bg-purple-600 hover:bg-purple-700 text-white'
-                    } disabled:opacity-50`}
-                  >
-                    {isLoading ? 'Đang đăng nhập...' : 'Đăng nhập'}
-                  </button>
-
-                  <div className="flex items-center gap-4">
-                    <div className="flex-1 h-px bg-white/20"></div>
-                    <p className="text-sm text-slate-400">Hoặc</p>
-                    <div className="flex-1 h-px bg-white/20"></div>
-                  </div>
-
-                  <button
-                    onClick={handleGoogleAuth}
-                    className="w-full py-3 rounded-lg border border-white/20 hover:bg-white/10 transition-all flex items-center justify-center gap-2"
-                  >
-                    <span>🔐</span> Đăng nhập bằng Google
-                  </button>
-
-                  <p className="text-center text-slate-400">
-                    Chưa có tài khoản?{' '}
-                    <Link href="/auth?mode=register" className="text-blue-400 hover:text-blue-300">
-                      Đăng ký ngay
-                    </Link>
-                  </p>
+          <form className="mt-6 space-y-4" onSubmit={handleAuth}>
+            {mode === 'register' && (
+              <div>
+                <div className="relative">
+                  <FieldIcon type="user" />
+                  <input
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="Full name"
+                    className={`${inputClass} ${errors.fullName ? 'border-red-400 focus:border-red-400 focus:ring-red-100' : 'border-slate-300'}`}
+                  />
                 </div>
-              </motion.div>
-            ) : (
-              <motion.div key="register" variants={formVariants} initial="hidden" animate="visible" exit="exit">
-                <div className="backdrop-blur-md bg-white/10 border border-white/20 rounded-3xl p-8 space-y-6">
-                  <h2 className="text-2xl font-bold">Đăng ký</h2>
-
-                  <div className="space-y-4">
-                    <input
-                      type="text"
-                      placeholder="Họ tên"
-                      value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
-                      className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:border-blue-400 transition-colors"
-                    />
-                    <input
-                      type="email"
-                      placeholder="Email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:border-blue-400 transition-colors"
-                    />
-                    <input
-                      type="password"
-                      placeholder="Mật khẩu"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:border-blue-400 transition-colors"
-                    />
-                  </div>
-
-                  {error && <p className="text-red-400 text-sm">{error}</p>}
-
-                  <button
-                    onClick={handleRegister}
-                    disabled={isLoading}
-                    className={`w-full py-3 rounded-lg font-bold transition-all ${
-                      isStudent
-                        ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                        : 'bg-purple-600 hover:bg-purple-700 text-white'
-                    } disabled:opacity-50`}
-                  >
-                    {isLoading ? 'Đang đăng ký...' : 'Đăng ký'}
-                  </button>
-
-                  <p className="text-center text-slate-400">
-                    Đã có tài khoản?{' '}
-                    <Link href="/auth?mode=login" className="text-blue-400 hover:text-blue-300">
-                      Đăng nhập
-                    </Link>
-                  </p>
-                </div>
-              </motion.div>
+                {errors.fullName && <p className="mt-1 text-xs text-red-600">{errors.fullName}</p>}
+              </div>
             )}
-          </AnimatePresence>
-        </motion.div>
+
+            <div>
+              <div className="relative">
+                <FieldIcon type="email" />
+                <input
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  type="email"
+                  placeholder="Email address"
+                  className={`${inputClass} ${errors.email ? 'border-red-400 focus:border-red-400 focus:ring-red-100' : 'border-slate-300'}`}
+                />
+              </div>
+              {errors.email && <p className="mt-1 text-xs text-red-600">{errors.email}</p>}
+            </div>
+
+            <div>
+              <div className="relative">
+                <FieldIcon type="lock" />
+                <input
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="Password"
+                  className={`${inputClass} pr-24 ${errors.password ? 'border-red-400 focus:border-red-400 focus:ring-red-100' : 'border-slate-300'}`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-[#2A73FF]"
+                >
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              {errors.password && <p className="mt-1 text-xs text-red-600">{errors.password}</p>}
+              {mode === 'register' && (
+                <p className={`mt-1 text-xs ${isPasswordValid(password) ? 'text-emerald-600' : 'text-slate-500'}`}>
+                  {passwordRuleText}
+                </p>
+              )}
+            </div>
+
+            {mode === 'login' && (
+              <div className="flex items-center justify-between text-sm">
+                <label className="flex items-center gap-2 text-slate-600">
+                  <input
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-slate-300 text-[#2A73FF] focus:ring-[#2A73FF]"
+                  />
+                  Remember me
+                </label>
+                <a href="#" className="font-medium text-[#2A73FF] hover:underline">
+                  Forgot password
+                </a>
+              </div>
+            )}
+
+            {serverError && <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{serverError}</p>}
+
+            <button
+              type="submit"
+              disabled={submitting}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#2A73FF] py-3 font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {submitting && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/60 border-t-white" />}
+              {submitting ? 'Processing...' : mode === 'login' ? 'Log In' : 'Join for Free'}
+            </button>
+          </form>
+
+          <div className="my-5 flex items-center gap-3 text-xs font-semibold tracking-wide text-slate-400">
+            <div className="h-px flex-1 bg-slate-200" />
+            OR
+            <div className="h-px flex-1 bg-slate-200" />
+          </div>
+
+          <div className="space-y-3">
+            <button
+              onClick={handleGoogleLogin}
+              disabled={submitting || !googleReady || googleBusy}
+              className="w-full rounded-xl border border-slate-300 bg-white py-3 text-sm font-semibold transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {googleBusy ? 'Connecting Google...' : mode === 'login' ? 'Continue with Google' : 'Sign up with Google'}
+            </button>
+            <button
+              onClick={() => handlePlaceholderSocial('Facebook')}
+              type="button"
+              className="w-full rounded-xl border border-slate-300 bg-white py-3 text-sm font-semibold transition hover:bg-slate-50"
+            >
+              {mode === 'login' ? 'Continue with Facebook' : 'Sign up with Facebook'}
+            </button>
+            <button
+              onClick={() => handlePlaceholderSocial('Apple')}
+              type="button"
+              className="w-full rounded-xl border border-slate-300 bg-white py-3 text-sm font-semibold transition hover:bg-slate-50"
+            >
+              {mode === 'login' ? 'Continue with Apple' : 'Sign up with Apple'}
+            </button>
+          </div>
+
+          <p className="mt-6 text-center text-sm text-slate-600">
+            {mode === 'login' ? 'New to the platform?' : 'Already have an account?'}{' '}
+            <Link
+              href={mode === 'login' ? '/auth?mode=register' : '/auth?mode=login'}
+              className="font-semibold text-[#2A73FF]"
+            >
+              {mode === 'login' ? 'Sign up' : 'Log in'}
+            </Link>
+          </p>
+        </section>
       </div>
     </main>
   );
@@ -283,9 +389,8 @@ function AuthPageContent() {
 
 export default function AuthPage() {
   return (
-    <Suspense fallback={<div className="w-full min-h-screen bg-slate-950 flex items-center justify-center">Loading...</div>}>
-      <AuthPageContent />
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-slate-700">Loading...</div>}>
+      <AuthContent />
     </Suspense>
   );
 }
-

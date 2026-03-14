@@ -30,9 +30,18 @@ export default function TestAnimationsPage() {
     mouthPucker: 0,
     eyeWideLeft: 0,
   });
-  const [rotationY, setRotationY] = useState(0);
+  const [rotationY, setRotationY] = useState(0.43);
+  const [autoDemo, setAutoDemo] = useState(false);
 
   const emotions = ['neutral', 'happy', 'sad', 'confused', 'excited', 'angry'];
+
+  const presets = {
+    smile: () => setTestBlendshapes({ ...testBlendshapes, mouthSmileLeft: 1, mouthSmileRight: 1 }),
+    talk: () => setTestBlendshapes({ ...testBlendshapes, jawOpen: 0.5 }),
+    blink: () => setTestBlendshapes({ ...testBlendshapes, eyeBlinkLeft: 1, eyeBlinkRight: 1 }),
+    surprised: () => setTestBlendshapes({ ...testBlendshapes, eyeWideLeft: 1, jawOpen: 0.5 }),
+    kiss: () => setTestBlendshapes({ ...testBlendshapes, mouthPucker: 1 }),
+  };
 
   const handleBlendshapeChange = (name: string, value: number) => {
     setTestBlendshapes(prev => ({ ...prev, [name]: value }));
@@ -81,6 +90,34 @@ export default function TestAnimationsPage() {
         {/* Lip-sync & Face Test */}
         <div className="space-y-4">
           <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-widest">Lip-sync & Biểu cảm (Blendshapes)</h3>
+
+          {/* Preset Buttons */}
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <button onClick={presets.smile} className="px-3 py-2 bg-yellow-600 hover:bg-yellow-500 rounded-lg text-xs font-medium transition-colors">
+              😊 Smile
+            </button>
+            <button onClick={presets.talk} className="px-3 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-xs font-medium transition-colors">
+              💬 Talk
+            </button>
+            <button onClick={presets.blink} className="px-3 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg text-xs font-medium transition-colors">
+              😉 Blink
+            </button>
+            <button onClick={presets.surprised} className="px-3 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-xs font-medium transition-colors">
+              😲 Surprise
+            </button>
+            <button onClick={presets.kiss} className="px-3 py-2 bg-pink-600 hover:bg-pink-500 rounded-lg text-xs font-medium transition-colors">
+              😘 Kiss
+            </button>
+            <button
+              onClick={() => setAutoDemo(!autoDemo)}
+              className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                autoDemo ? 'bg-green-600 hover:bg-green-500 animate-pulse' : 'bg-slate-700 hover:bg-slate-600'
+              }`}
+            >
+              {autoDemo ? '⏸️ Stop' : '▶️ Auto'}
+            </button>
+          </div>
+
           <div className="space-y-3 bg-slate-900/50 p-4 rounded-xl border border-slate-800">
             {Object.entries(testBlendshapes).map(([name, value]) => (
               <div key={name} className="space-y-1">
@@ -130,7 +167,7 @@ export default function TestAnimationsPage() {
               className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
             />
             <button 
-              onClick={() => setRotationY(0)}
+              onClick={() => setRotationY(0.43)}
               className="w-full mt-2 py-2 text-xs bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors"
             >
               Reset Rotation

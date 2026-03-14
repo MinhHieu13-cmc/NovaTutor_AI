@@ -1,10 +1,25 @@
+import { authService } from './authService';
+
+// API_URL đã chứa /api/v1 từ env — chỉ thêm path sau
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+
+export type StreamChatMessage = {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+};
+
 export const chatService = {
-  async streamChat(messages: any[], workspaceId: string, onChunk: (chunk: string) => void) {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/chat/stream`, {
+  async streamChat(
+    messages: StreamChatMessage[],
+    workspaceId: string,
+    onChunk: (chunk: string) => void
+  ) {
+    const token = authService.getToken(); // dùng đúng key 'novatutor_token'
+    const response = await fetch(`${API_BASE}/chat/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({ messages, workspace_id: workspaceId }),
     });
@@ -22,14 +37,14 @@ export const chatService = {
 
       const chunk = decoder.decode(value);
       const lines = chunk.split('\n');
-      
+
       for (const line of lines) {
         if (line.startsWith('data: ')) {
           const data = line.slice(6);
-          if (data === '[DONE]') break;
+          if (data === '[DONE]') return;
           onChunk(data);
         }
       }
     }
-  }
+  },
 };

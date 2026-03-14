@@ -1,38 +1,48 @@
+"""
+Auth API — Dual-mode: PostgreSQL (local) + Firestore (GCP production)
+- LOCAL:  DATABASE_URL set → dùng PostgreSQL trực tiếp, không cần GCP ADC
+- GCP:    DATABASE_URL trỏ Cloud SQL + Firestore available → dùng cả hai
+"""
 import os
-import json
-from typing import Optional
-from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException, status, Header
-from pydantic import BaseModel, EmailStr
+import uuid
+import hashlib
+from typing import Optional, Literal
+from datetime import datetime, timedelta, timezone
+from fastapi import APIRouter, HTTPException, Header
+from pydantic import BaseModel, EmailStr, field_validator
 import jwt
-from google.cloud import firestore, storage
-from google.oauth2 import service_account
-from google.auth.transport.requests import Request
-from app.core.config import settings
 import asyncpg
+from app.core.config import settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# Initialize GCP clients
-db_firestore = firestore.Client()  # Firestore for user profiles
-storage_client = storage.Client()
 
-# JWT Configuration
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+# ─── Database URL ─────────────────────────────────────────────────────────────
+_RAW = os.getenv("DATABASE_URL", "")
+DATABASE_URL = _RAW.replace("postgresql+asyncpg://", "postgresql://") if _RAW else None
 
-# Database URL - normalize for asyncpg
-_DATABASE_URL_RAW = os.getenv("DATABASE_URL", "")
-DATABASE_URL = _DATABASE_URL_RAW.replace("postgresql+asyncpg://", "postgresql://") if _DATABASE_URL_RAW else None
+# ─── Firestore (optional — only used in GCP production) ──────────────────────
+_firestore_client = None
+try:
+    from google.cloud import firestore as _fs
+    _firestore_client = _fs.Client()
+except Exception:
+    pass  # Expected locally — auth falls back to PostgreSQL only
 
-# ============= Pydantic Models =============
+# ─── Pydantic Models ──────────────────────────────────────────────────────────
 
 class UserRegister(BaseModel):
     email: EmailStr
     password: str
     full_name: str
-    role: str  # "student" or "teacher"
+    role: Literal["student", "teacher"]
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_length(cls, value: str) -> str:
+        if len(value) < settings.AUTH_PASSWORD_MIN_LENGTH:
+            raise ValueError(f"Password must be at least {settings.AUTH_PASSWORD_MIN_LENGTH} characters")
+        return value
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -51,280 +61,201 @@ class Token(BaseModel):
     user: UserResponse
 
 class GoogleAuthRequest(BaseModel):
-    id_token: str  # Token từ Google Login
+    id_token: str
 
-# ============= Helper Functions =============
+# ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    """Tạo JWT token"""
+def _hash_pw(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def _assert_jwt_secret_security() -> None:
+    if settings.ENFORCE_STRONG_JWT_SECRET and not settings.is_jwt_secret_strong():
+        raise HTTPException(
+            status_code=503,
+            detail="JWT_SECRET_KEY is weak. Please configure a strong secret for production.",
+        )
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    _assert_jwt_secret_security()
     to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(minutes=settings.JWT_TOKEN_TTL_MINUTES)
+    )
+    to_encode["exp"] = expire
+    return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
-async def get_current_user(authorization: Optional[str] = Header(default=None, alias="Authorization")):
-    """Verify JWT token và lấy user info từ Firestore"""
+async def _conn():
+    """Open asyncpg connection; raises 503 if DATABASE_URL missing."""
+    if not DATABASE_URL:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured.")
+    try:
+        return await asyncpg.connect(DATABASE_URL)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"DB connection failed: {e}")
+
+# ─── JWT Dependency (used by other routers) ───────────────────────────────────
+
+async def get_current_user(
+    authorization: Optional[str] = Header(default=None, alias="Authorization")
+) -> dict:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid token")
 
     token = authorization.split("Bearer ")[1]
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
+        )
+        user_id: str | None = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token payload")
     except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-    # Get user from Firestore
-    user_doc = db_firestore.collection("users").document(user_id).get()
-    if not user_doc.exists:
+    db = await _conn()
+    try:
+        row = await db.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
+    finally:
+        await db.close()
+
+    if not row:
         raise HTTPException(status_code=404, detail="User not found")
+    return dict(row)
 
-    return user_doc.to_dict()
-
-# ============= Auth Routes =============
+# ─── Routes ───────────────────────────────────────────────────────────────────
 
 @router.post("/register", response_model=Token)
 async def register(user_data: UserRegister):
-    """
-    Đăng ký user mới với role (student/teacher)
-    Sử dụng GCP Firestore để lưu user profile
-    """
+    db = await _conn()
     try:
-        # Check if user already exists
-        existing_users = db_firestore.collection("users").where("email", "==", user_data.email).stream()
-        if list(existing_users):
+        existing = await db.fetchrow("SELECT id FROM users WHERE email = $1", user_data.email)
+        if existing:
             raise HTTPException(status_code=400, detail="Email already registered")
 
-        # Generate user ID
-        user_id = db_firestore.collection("users").document().id
+        uid        = str(uuid.uuid4())
+        pw_hash    = _hash_pw(user_data.password)
+        created_at = datetime.now(timezone.utc)
 
-        # Hash password (in production, use bcrypt)
-        import hashlib
-        hashed_password = hashlib.sha256(user_data.password.encode()).hexdigest()
-
-        # Create user document in Firestore
-        user_profile = {
-            "id": user_id,
-            "email": user_data.email,
-            "full_name": user_data.full_name,
-            "role": user_data.role,
-            "password_hash": hashed_password,
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
-        }
-
-        db_firestore.collection("users").document(user_id).set(user_profile)
-
-        # Mirror user profile into Cloud SQL for FK consistency
-        if DATABASE_URL:
-            conn = None
-            try:
-                conn = await asyncpg.connect(DATABASE_URL)
-                await conn.execute(
-                    """
-                    INSERT INTO users (id, email, full_name, role, password_hash, google_id, created_at, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    user_id,
-                    user_data.email,
-                    user_data.full_name,
-                    user_data.role,
-                    hashed_password,
-                    None,
-                    datetime.utcnow(),
-                    datetime.utcnow(),
-                )
-            finally:
-                if conn:
-                    await conn.close()
-
-        # Create JWT token
-        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={"sub": user_id},
-            expires_delta=access_token_expires
+        await db.execute(
+            """
+            INSERT INTO users (id, email, full_name, role, password_hash, google_id, created_at, updated_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$7)
+            """,
+            uid, user_data.email, user_data.full_name,
+            user_data.role, pw_hash, None, created_at,
         )
-
-        return Token(
-            access_token=access_token,
-            token_type="bearer",
-            user=UserResponse(
-                id=user_id,
-                email=user_data.email,
-                full_name=user_data.full_name,
-                role=user_data.role,
-                created_at=user_profile["created_at"]
-            )
-        )
-
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Registration failed: {str(e)}")
-
-@router.post("/login", response_model=Token)
-async def login(credentials: UserLogin):
-    """
-    Đăng nhập bằng email & password
-    """
-    try:
-        import hashlib
-
-        # Find user by email
-        users = db_firestore.collection("users").where("email", "==", credentials.email).stream()
-        user_data = None
-        user_id = None
-
-        for user in users:
-            user_data = user.to_dict()
-            user_id = user.id
-            break
-
-        if not user_data:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-
-        # Verify password
-        hashed_password = hashlib.sha256(credentials.password.encode()).hexdigest()
-        if user_data.get("password_hash") != hashed_password:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-
-        # Create JWT token
-        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={"sub": user_id},
-            expires_delta=access_token_expires
-        )
-
-        return Token(
-            access_token=access_token,
-            token_type="bearer",
-            user=UserResponse(
-                id=user_id,
-                email=user_data["email"],
-                full_name=user_data["full_name"],
-                role=user_data["role"],
-                created_at=user_data["created_at"]
-            )
-        )
-
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail="Login failed")
+        raise HTTPException(status_code=400, detail=f"Registration failed: {e}")
+    finally:
+        await db.close()
 
-@router.post("/google")
-async def google_auth(request: GoogleAuthRequest):
-    """
-    Google OAuth Sign-in / Sign-up
-    """
+    # Mirror to Firestore on GCP (best-effort, never blocks local flow)
+    if _firestore_client:
+        try:
+            _firestore_client.collection("users").document(uid).set({
+                "id": uid, "email": user_data.email,
+                "full_name": user_data.full_name, "role": user_data.role,
+                "password_hash": pw_hash, "created_at": created_at.isoformat(),
+            })
+        except Exception:
+            pass
+
+    return Token(
+        access_token=create_access_token({"sub": uid}),
+        token_type="bearer",
+        user=UserResponse(
+            id=uid, email=user_data.email,
+            full_name=user_data.full_name, role=user_data.role,
+            created_at=created_at.isoformat(),
+        )
+    )
+
+
+@router.post("/login", response_model=Token)
+async def login(credentials: UserLogin):
+    db = await _conn()
     try:
-        from google.auth.transport.requests import Request as GoogleRequest
-        from google.oauth2 import id_token
+        row = await db.fetchrow("SELECT * FROM users WHERE email = $1", credentials.email)
+    finally:
+        await db.close()
 
-        # Verify Google ID token
-        idinfo = id_token.verify_oauth2_token(
-            request.id_token,
-            GoogleRequest(),
-            os.getenv("GOOGLE_OAUTH_CLIENT_ID")
+    if not row or row["password_hash"] != _hash_pw(credentials.password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    return Token(
+        access_token=create_access_token({"sub": row["id"]}),
+        token_type="bearer",
+        user=UserResponse(
+            id=row["id"], email=row["email"],
+            full_name=row["full_name"], role=row["role"],
+            created_at=str(row["created_at"]),
         )
+    )
 
-        email = idinfo.get("email")
-        full_name = idinfo.get("name", email.split("@")[0])
-        user_id_from_google = idinfo.get("sub")
 
-        # Check if user exists
-        existing_users = db_firestore.collection("users").where("email", "==", email).stream()
-        user_data = None
-        user_id = None
-
-        for user in existing_users:
-            user_data = user.to_dict()
-            user_id = user.id
-            break
-
-        # If not exists, create new user (default role: student)
-        if not user_data:
-            user_id = user_id_from_google
-            user_profile = {
-                "id": user_id,
-                "email": email,
-                "full_name": full_name,
-                "role": "student",  # Default role for Google signup
-                "google_id": user_id_from_google,
-                "created_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat()
-            }
-            db_firestore.collection("users").document(user_id).set(user_profile)
-            user_data = user_profile
-
-        # Mirror Google user into Cloud SQL for FK consistency
-        if DATABASE_URL:
-            conn = None
-            try:
-                conn = await asyncpg.connect(DATABASE_URL)
-                await conn.execute(
-                    """
-                    INSERT INTO users (id, email, full_name, role, password_hash, google_id, created_at, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    user_id,
-                    user_data["email"],
-                    user_data["full_name"],
-                    user_data["role"],
-                    user_data.get("password_hash"),
-                    user_data.get("google_id"),
-                    datetime.utcnow(),
-                    datetime.utcnow(),
-                )
-            finally:
-                if conn:
-                    await conn.close()
-
-        # Create JWT token
-        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={"sub": user_id},
-            expires_delta=access_token_expires
+@router.post("/google", response_model=Token)
+async def google_auth(request: GoogleAuthRequest):
+    """Verify Google ID token → upsert user in PostgreSQL."""
+    try:
+        from google.oauth2 import id_token as _id_token
+        from google.auth.transport.requests import Request as _GReq
+        idinfo = _id_token.verify_oauth2_token(
+            request.id_token, _GReq(), os.getenv("GOOGLE_OAUTH_CLIENT_ID")
         )
-
-        return Token(
-            access_token=access_token,
-            token_type="bearer",
-            user=UserResponse(
-                id=user_id,
-                email=user_data["email"],
-                full_name=user_data["full_name"],
-                role=user_data["role"],
-                created_at=user_data["created_at"]
-            )
-        )
-
     except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Google auth failed: {str(e)}")
+        raise HTTPException(status_code=401, detail=f"Google token verification failed: {e}")
+
+    email      = idinfo["email"]
+    full_name  = idinfo.get("name", email.split("@")[0])
+    google_sub = idinfo["sub"]
+
+    db = await _conn()
+    try:
+        row = await db.fetchrow("SELECT * FROM users WHERE email = $1", email)
+        if row:
+            uid         = row["id"]
+            role        = row["role"]
+            created_iso = str(row["created_at"])
+        else:
+            uid        = google_sub
+            role       = "student"
+            created_at = datetime.now(timezone.utc)
+            created_iso = created_at.isoformat()
+            await db.execute(
+                """
+                INSERT INTO users (id, email, full_name, role, password_hash, google_id, created_at, updated_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$7) ON CONFLICT (id) DO NOTHING
+                """,
+                uid, email, full_name, role, None, google_sub, created_at,
+            )
+    finally:
+        await db.close()
+
+    return Token(
+        access_token=create_access_token({"sub": uid}),
+        token_type="bearer",
+        user=UserResponse(
+            id=uid, email=email, full_name=full_name,
+            role=role, created_at=created_iso,
+        )
+    )
+
 
 @router.get("/me", response_model=UserResponse)
-async def get_current_user_endpoint(authorization: Optional[str] = Header(default=None, alias="Authorization")):
-    """
-    Lấy thông tin user hiện tại
-    """
-    user_data = await get_current_user(authorization)
+async def get_me(authorization: Optional[str] = Header(default=None, alias="Authorization")):
+    user = await get_current_user(authorization)
     return UserResponse(
-        id=user_data["id"],
-        email=user_data["email"],
-        full_name=user_data["full_name"],
-        role=user_data["role"],
-        created_at=user_data["created_at"]
+        id=user["id"], email=user["email"],
+        full_name=user["full_name"], role=user["role"],
+        created_at=str(user["created_at"]),
     )
+
 
 @router.post("/logout")
 async def logout():
-    """
-    Đăng xuất (xóa token ở frontend)
-    """
     return {"message": "Logout successful"}

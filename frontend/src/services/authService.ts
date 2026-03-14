@@ -30,6 +30,7 @@ export interface LoginData {
 class AuthService {
   private tokenKey = 'novatutor_token';
   private userKey = 'novatutor_user';
+  private roleCookieKey = 'novatutor_role';
 
   // Register new user
   async register(data: RegisterData): Promise<AuthResponse> {
@@ -37,6 +38,7 @@ class AuthService {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
+      credentials: 'include',
     });
 
     if (!response.ok) {
@@ -56,6 +58,7 @@ class AuthService {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
+      credentials: 'include',
     });
 
     if (!response.ok) {
@@ -75,6 +78,7 @@ class AuthService {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id_token: idToken }),
+      credentials: 'include',
     });
 
     if (!response.ok) {
@@ -95,6 +99,7 @@ class AuthService {
 
     const response = await fetch(`${API_URL}/auth/me`, {
       headers: { Authorization: `Bearer ${token}` },
+      credentials: 'include',
     });
 
     if (!response.ok) {
@@ -107,12 +112,32 @@ class AuthService {
     return user;
   }
 
-  // Logout
-  logout(): void {
+  private setCookie(name: string, value: string, maxAgeSeconds: number): void {
+    if (typeof document === 'undefined') return;
+    const secure = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : '';
+    document.cookie = `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAgeSeconds}; SameSite=Lax${secure}`;
+  }
+
+  private clearCookie(name: string): void {
+    if (typeof document === 'undefined') return;
+    const secure = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : '';
+    document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax${secure}`;
+  }
+
+  private clearSession(): void {
     if (typeof window !== 'undefined') {
       localStorage.removeItem(this.tokenKey);
       localStorage.removeItem(this.userKey);
-      window.location.href = '/auth';
+      this.clearCookie(this.tokenKey);
+      this.clearCookie(this.roleCookieKey);
+    }
+  }
+
+  // Logout
+  logout(redirect: boolean = true): void {
+    this.clearSession();
+    if (redirect && typeof window !== 'undefined') {
+      window.location.href = '/auth?mode=login';
     }
   }
 
@@ -120,6 +145,7 @@ class AuthService {
   setToken(token: string): void {
     if (typeof window !== 'undefined') {
       localStorage.setItem(this.tokenKey, token);
+      this.setCookie(this.tokenKey, token, 60 * 60 * 24 * 7);
     }
   }
 
@@ -134,26 +160,65 @@ class AuthService {
   setUser(user: User): void {
     if (typeof window !== 'undefined') {
       localStorage.setItem(this.userKey, JSON.stringify(user));
+      this.setCookie(this.roleCookieKey, user.role, 60 * 60 * 24 * 7);
     }
   }
 
   getUser(): User | null {
     if (typeof window !== 'undefined') {
+      const token = this.getToken();
+      if (!token) return null;
+
       const userData = localStorage.getItem(this.userKey);
-      return userData ? JSON.parse(userData) : null;
+      if (!userData) return null;
+
+      try {
+        return JSON.parse(userData) as User;
+      } catch {
+        localStorage.removeItem(this.userKey);
+        return null;
+      }
     }
     return null;
   }
 
   // Check auth status
   isAuthenticated(): boolean {
-    return !!this.getToken();
+    return !!this.getToken() && !!this.getUser();
   }
 
   // Get auth headers
   getAuthHeaders(): Record<string, string> {
     const token = this.getToken();
     return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+
+  async validateSession(): Promise<User | null> {
+    const token = this.getToken();
+    const cachedUser = this.getUser();
+    if (!token || !cachedUser) {
+      this.clearSession();
+      return null;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        this.clearSession();
+        return null;
+      }
+
+      const user: User = await response.json();
+      this.setUser(user);
+      return user;
+    } catch {
+      this.clearSession();
+      return null;
+    }
   }
 }
 

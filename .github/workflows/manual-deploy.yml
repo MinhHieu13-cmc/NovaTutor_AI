@@ -152,7 +152,7 @@ jobs:
             --platform=managed \
             --region=${{ env.REGION }} \
             --allow-unauthenticated \
-            --set-env-vars="NEXT_PUBLIC_API_URL=${BACKEND_URL},NEXT_PUBLIC_GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" \
+            --set-env-vars="NEXT_PUBLIC_API_URL=${BACKEND_URL}" \
             --memory=1Gi \
             --cpu=1 \
             --timeout=900

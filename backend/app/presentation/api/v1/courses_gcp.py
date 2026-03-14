@@ -1,23 +1,37 @@
+"""
+Courses API — Dual-mode: PostgreSQL (local) + Firestore mirror (GCP production)
+"""
 import os
-from typing import List, Optional
-from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+import json
+from typing import Optional
+from datetime import datetime, timezone
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
-from google.cloud import firestore, storage
 import asyncpg
-from app.core.config import settings
 
 router = APIRouter(prefix="/courses", tags=["courses"])
 
-# Initialize GCP clients
-db_firestore = firestore.Client()
-storage_client = storage.Client()
+# ─── Firestore (optional — GCP production only) ───────────────────────────────
+_firestore_client = None
+try:
+    from google.cloud import firestore as _fs
+    _firestore_client = _fs.Client()
+except Exception:
+    pass
 
-# Database connection pool
-_DATABASE_URL_RAW = os.getenv("DATABASE_URL", "")
-DATABASE_URL = _DATABASE_URL_RAW.replace("postgresql+asyncpg://", "postgresql://") if _DATABASE_URL_RAW else None
+# ─── Cloud Storage (optional — GCP production only) ───────────────────────────
+_storage_client = None
+try:
+    from google.cloud import storage as _gcs
+    _storage_client = _gcs.Client()
+except Exception:
+    pass
 
-# ============= Pydantic Models =============
+# ─── Database URL ─────────────────────────────────────────────────────────────
+_RAW = os.getenv("DATABASE_URL", "")
+DATABASE_URL = _RAW.replace("postgresql+asyncpg://", "postgresql://") if _RAW else None
+
+# ─── Pydantic Models ──────────────────────────────────────────────────────────
 
 class CourseCreate(BaseModel):
     name: str
@@ -44,366 +58,268 @@ class VoiceConfig(BaseModel):
     speed: float = 1.0
     pitch: float = 1.0
 
-# ============= Helper Functions =============
+# ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async def get_db():
-    """Get database connection"""
+    if not DATABASE_URL:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured.")
     conn = None
     try:
-        if not DATABASE_URL:
-            raise HTTPException(status_code=500, detail="DATABASE_URL is not configured")
         conn = await asyncpg.connect(DATABASE_URL)
         yield conn
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
+        raise HTTPException(status_code=503, detail=f"DB connection failed: {e}")
     finally:
         if conn:
             await conn.close()
 
-async def verify_teacher_ownership(course_id: str, teacher_id: str, conn):
-    """Verify that teacher owns the course"""
-    course = await conn.fetchrow(
-        "SELECT teacher_id FROM courses WHERE id = $1",
-        course_id
-    )
-    if not course or course['teacher_id'] != teacher_id:
-        raise HTTPException(status_code=403, detail="Unauthorized")
+async def _verify_teacher_ownership(course_id: str, teacher_id: str, conn):
+    row = await conn.fetchrow("SELECT teacher_id FROM courses WHERE id = $1", course_id)
+    if not row or row["teacher_id"] != teacher_id:
+        raise HTTPException(status_code=403, detail="Unauthorized: you don't own this course")
 
-# ============= Teacher Routes =============
+def _row_to_course(row) -> dict:
+    d = dict(row)
+    # voice_config may come back as str from postgres json column
+    if isinstance(d.get("voice_config"), str):
+        try:
+            d["voice_config"] = json.loads(d["voice_config"])
+        except Exception:
+            d["voice_config"] = {}
+    if d.get("voice_config") is None:
+        d["voice_config"] = {}
+    d["created_at"] = str(d["created_at"])
+    if d.get("updated_at"):
+        d["updated_at"] = str(d["updated_at"])
+    return d
+
+# ─── Teacher Routes ───────────────────────────────────────────────────────────
 
 @router.post("/create", response_model=CourseResponse)
-async def create_course(course_data: CourseCreate, teacher_id: str, conn = Depends(get_db)):
-    """
-    Giảng viên tạo khóa học mới
-    """
-    try:
-        import json
-        course_id = str(datetime.utcnow().timestamp())
-        created_at_dt = datetime.utcnow()
-        created_at_str = created_at_dt.isoformat()
-        voice_config = {"voice_name": "Zephyr", "language": "en", "speed": 1.0, "pitch": 1.0}
+async def create_course(course_data: CourseCreate, teacher_id: str, conn=Depends(get_db)):
+    course_id   = str(datetime.now(timezone.utc).timestamp()).replace(".", "")
+    created_at  = datetime.now(timezone.utc)
+    voice_config = {"voice_name": "Zephyr", "language": "en", "speed": 1.0, "pitch": 1.0}
 
-        # Insert into Cloud SQL PostgreSQL - use datetime object for TIMESTAMP
+    try:
         await conn.execute(
             """
             INSERT INTO courses (id, teacher_id, name, description, subject, voice_config, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+            VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7)
             """,
             course_id, teacher_id, course_data.name, course_data.description,
-            course_data.subject, json.dumps(voice_config), created_at_dt
+            course_data.subject, json.dumps(voice_config), created_at,
         )
-
-        # Also store in Firestore for faster queries
-        db_firestore.collection("courses").document(course_id).set({
-            "id": course_id,
-            "teacher_id": teacher_id,
-            "name": course_data.name,
-            "description": course_data.description,
-            "subject": course_data.subject,
-            "voice_config": voice_config,
-            "created_at": created_at_str,
-            "students_count": 0
-        })
-
-        return CourseResponse(
-            id=course_id,
-            teacher_id=teacher_id,
-            name=course_data.name,
-            description=course_data.description,
-            subject=course_data.subject,
-            voice_config=voice_config,
-            created_at=created_at_str
-        )
-
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to create course: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to create course: {e}")
+
+    # Best-effort Firestore mirror
+    if _firestore_client:
+        try:
+            _firestore_client.collection("courses").document(course_id).set({
+                "id": course_id, "teacher_id": teacher_id,
+                "name": course_data.name, "subject": course_data.subject,
+                "created_at": created_at.isoformat(),
+            })
+        except Exception:
+            pass
+
+    return CourseResponse(
+        id=course_id, teacher_id=teacher_id,
+        name=course_data.name, description=course_data.description,
+        subject=course_data.subject, voice_config=voice_config,
+        created_at=created_at.isoformat(),
+    )
+
 
 @router.get("/my-courses")
-async def get_teacher_courses(teacher_id: str, conn = Depends(get_db)):
-    """
-    Lấy danh sách khóa học của giảng viên
-    """
+async def get_teacher_courses(teacher_id: str, conn=Depends(get_db)):
     try:
-        courses = await conn.fetch(
-            "SELECT * FROM courses WHERE teacher_id = $1 ORDER BY created_at DESC",
-            teacher_id
+        rows = await conn.fetch(
+            "SELECT * FROM courses WHERE teacher_id=$1 ORDER BY created_at DESC", teacher_id
         )
-        return [dict(course) for course in courses]
-
+        return [_row_to_course(r) for r in rows]
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch courses: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 @router.put("/{course_id}")
-async def update_course(course_id: str, course_update: CourseUpdate, teacher_id: str, conn = Depends(get_db)):
-    """
-    Giảng viên chỉnh sửa thông tin khóa học
-    """
+async def update_course(course_id: str, course_update: CourseUpdate, teacher_id: str, conn=Depends(get_db)):
+    await _verify_teacher_ownership(course_id, teacher_id, conn)
+
+    fields, vals, idx = [], [], 1
+    for attr, col in [("name", "name"), ("description", "description")]:
+        v = getattr(course_update, attr)
+        if v is not None:
+            fields.append(f"{col} = ${idx}"); vals.append(v); idx += 1
+    if course_update.voice_config:
+        fields.append(f"voice_config = ${idx}::jsonb")
+        vals.append(json.dumps(course_update.voice_config)); idx += 1
+
+    if not fields:
+        return {"message": "No fields to update"}
+
+    fields.append(f"updated_at = ${idx}"); vals.append(datetime.now(timezone.utc)); idx += 1
+    vals.append(course_id)
+
     try:
-        # Verify ownership
-        await verify_teacher_ownership(course_id, teacher_id, conn)
-
-        # Build update query
-        update_fields = []
-        update_values = []
-        param_count = 1
-
-        if course_update.name:
-            update_fields.append(f"name = ${param_count}")
-            update_values.append(course_update.name)
-            param_count += 1
-
-        if course_update.description:
-            update_fields.append(f"description = ${param_count}")
-            update_values.append(course_update.description)
-            param_count += 1
-
-        if course_update.voice_config:
-            update_fields.append(f"voice_config = ${param_count}")
-            update_values.append(course_update.voice_config)
-            param_count += 1
-
-        if not update_fields:
-            return {"message": "No fields to update"}
-
-        update_fields.append(f"updated_at = ${param_count}")
-        update_values.append(datetime.utcnow().isoformat())
-        param_count += 1
-        update_values.append(course_id)
-
-        query = f"UPDATE courses SET {', '.join(update_fields)} WHERE id = ${param_count} RETURNING *"
-        course = await conn.fetchrow(query, *update_values)
-
-        # Update Firestore
-        db_firestore.collection("courses").document(course_id).update(dict(course))
-
-        return dict(course)
-
-    except HTTPException:
-        raise
+        row = await conn.fetchrow(
+            f"UPDATE courses SET {', '.join(fields)} WHERE id = ${idx} RETURNING *", *vals
+        )
+        return _row_to_course(row)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to update course: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 @router.delete("/{course_id}")
-async def delete_course(course_id: str, teacher_id: str, conn = Depends(get_db)):
-    """
-    Giảng viên xóa khóa học
-    """
+async def delete_course(course_id: str, teacher_id: str, conn=Depends(get_db)):
+    await _verify_teacher_ownership(course_id, teacher_id, conn)
     try:
-        # Verify ownership
-        await verify_teacher_ownership(course_id, teacher_id, conn)
-
         await conn.execute("DELETE FROM courses WHERE id = $1", course_id)
-
-        # Delete from Firestore
-        db_firestore.collection("courses").document(course_id).delete()
-
+        if _firestore_client:
+            try:
+                _firestore_client.collection("courses").document(course_id).delete()
+            except Exception:
+                pass
         return {"message": "Course deleted successfully"}
-
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to delete course: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 @router.post("/{course_id}/upload-document")
-async def upload_document(course_id: str, file: UploadFile = File(...), teacher_id: str = "", conn = Depends(get_db)):
-    """
-    Giảng viên upload tài liệu PDF cho khóa học
-    Automatically triggers RAG processing for document embeddings
-    """
+async def upload_document(
+    course_id: str, file: UploadFile = File(...),
+    teacher_id: str = "", conn=Depends(get_db)
+):
+    await _verify_teacher_ownership(course_id, teacher_id, conn)
+
+    file_content = await file.read()
+    doc_id       = str(datetime.now(timezone.utc).timestamp()).replace(".", "")
+    uploaded_at  = datetime.now(timezone.utc)
+
+    # Upload to GCS when available; otherwise store local placeholder URL
+    if _storage_client:
+        try:
+            bucket = _storage_client.bucket(os.getenv("GCS_BUCKET_NAME", "novatutor-documents"))
+            blob   = bucket.blob(f"courses/{course_id}/{file.filename}")
+            blob.upload_from_string(file_content, content_type=file.content_type)
+            public_url = blob.public_url
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"Cloud Storage not available: {e}")
+    else:
+        # Local fallback — record without actual file hosting
+        public_url = f"local://courses/{course_id}/{file.filename}"
+
     try:
-        # Verify course ownership
-        await verify_teacher_ownership(course_id, teacher_id, conn)
-
-        # Upload to Cloud Storage
-        bucket = storage_client.bucket(os.getenv("GCS_BUCKET_NAME", "novatutor-documents"))
-        file_content = await file.read()
-        blob_path = f"courses/{course_id}/{file.filename}"
-        blob = bucket.blob(blob_path)
-        blob.upload_from_string(file_content)
-
-        # Get public URL
-        public_url = blob.public_url
-
-        # Save record to Cloud SQL
-        doc_id = str(datetime.utcnow().timestamp())
-        uploaded_at_dt = datetime.utcnow()
-        uploaded_at_str = uploaded_at_dt.isoformat()
-
         await conn.execute(
             """
             INSERT INTO course_documents (id, course_id, document_url, document_name, document_type, uploaded_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1,$2,$3,$4,$5,$6)
             """,
-            doc_id, course_id, public_url, file.filename, file.filename.split(".")[-1],
-            uploaded_at_dt
+            doc_id, course_id, public_url, file.filename,
+            file.filename.rsplit(".", 1)[-1], uploaded_at,
         )
-
-        # Also store in Firestore for faster retrieval
-        db_firestore.collection("course_documents").document(doc_id).set({
-            "id": doc_id,
-            "course_id": course_id,
-            "document_url": public_url,
-            "document_name": file.filename,
-            "document_type": file.filename.split(".")[-1],
-            "uploaded_at": uploaded_at_str
-        })
-
-        # Trigger RAG processing in background
-        try:
-            from app.application.services.rag_production import production_rag_engine
-            chunks_created = await production_rag_engine.process_document(
-                document_id=doc_id,
-                document_url=public_url,
-                course_id=course_id
-            )
-            rag_status = f"Processed {chunks_created} chunks"
-        except Exception as rag_error:
-            print(f"RAG processing failed: {str(rag_error)}")
-            rag_status = "Uploaded but RAG processing pending"
-
-        return {
-            "message": "Document uploaded successfully",
-            "document": {
-                "id": doc_id,
-                "course_id": course_id,
-                "document_url": public_url,
-                "document_name": file.filename
-            },
-            "rag_status": rag_status
-        }
-
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to upload document: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Trigger RAG processing (best-effort)
+    rag_status = "Pending RAG processing"
+    try:
+        from app.application.services.rag_production import production_rag_engine
+        chunks = await production_rag_engine.process_document(
+            document_id=doc_id, document_url=public_url, course_id=course_id
+        )
+        rag_status = f"Processed {chunks} chunks"
+    except Exception:
+        pass
+
+    return {
+        "message": "Document uploaded successfully",
+        "document": {
+            "id": doc_id, "course_id": course_id,
+            "document_url": public_url, "document_name": file.filename,
+            "uploaded_at": uploaded_at.isoformat(),
+        },
+        "rag_status": rag_status,
+    }
+
 
 @router.post("/{course_id}/configure-voice")
-async def configure_voice(course_id: str, voice_config: VoiceConfig, teacher_id: str, conn = Depends(get_db)):
-    """
-    Giảng viên cấu hình AI voice cho khóa học
-    """
+async def configure_voice(course_id: str, voice_config: VoiceConfig, teacher_id: str, conn=Depends(get_db)):
+    await _verify_teacher_ownership(course_id, teacher_id, conn)
+    config_dict = voice_config.dict()
     try:
-        # Verify ownership
-        await verify_teacher_ownership(course_id, teacher_id, conn)
-
-        config_dict = voice_config.dict()
-
         await conn.execute(
-            "UPDATE courses SET voice_config = $1, updated_at = $2 WHERE id = $3",
-            config_dict, datetime.utcnow().isoformat(), course_id
+            "UPDATE courses SET voice_config=$1::jsonb, updated_at=$2 WHERE id=$3",
+            json.dumps(config_dict), datetime.now(timezone.utc), course_id,
         )
-
-        # Update Firestore
-        db_firestore.collection("courses").document(course_id).update({
-            "voice_config": config_dict,
-            "updated_at": datetime.utcnow().isoformat()
-        })
-
         return {"message": "Voice configuration updated"}
-
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to configure voice: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
 
-# ============= Student Routes =============
+
+# ─── Student Routes ───────────────────────────────────────────────────────────
 
 @router.get("/available")
-async def get_available_courses(conn = Depends(get_db)):
-    """
-    Học sinh lấy danh sách khóa học có sẵn
-    """
+async def get_available_courses(conn=Depends(get_db)):
     try:
-        courses = await conn.fetch("SELECT * FROM courses ORDER BY created_at DESC")
-        return [dict(course) for course in courses]
-
+        rows = await conn.fetch("SELECT * FROM courses ORDER BY created_at DESC")
+        return [_row_to_course(r) for r in rows]
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch courses: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 @router.post("/{course_id}/enroll")
-async def enroll_course(course_id: str, student_id: str, conn = Depends(get_db)):
-    """
-    Học sinh tham gia khóa học
-    """
+async def enroll_course(course_id: str, student_id: str, conn=Depends(get_db)):
+    existing = await conn.fetchrow(
+        "SELECT id FROM enrollments WHERE course_id=$1 AND student_id=$2", course_id, student_id
+    )
+    if existing:
+        raise HTTPException(status_code=400, detail="Already enrolled in this course")
+
+    enrollment_id = str(datetime.now(timezone.utc).timestamp()).replace(".", "")
+    joined_at     = datetime.now(timezone.utc)
     try:
-        # Check if already enrolled
-        existing = await conn.fetchrow(
-            "SELECT * FROM enrollments WHERE course_id = $1 AND student_id = $2",
-            course_id, student_id
-        )
-
-        if existing:
-            raise HTTPException(status_code=400, detail="Already enrolled in this course")
-
-        enrollment_id = str(datetime.utcnow().timestamp())
-        joined_at_dt = datetime.utcnow()
-        joined_at_str = joined_at_dt.isoformat()
-
         await conn.execute(
-            """
-            INSERT INTO enrollments (id, student_id, course_id, joined_at)
-            VALUES ($1, $2, $3, $4)
-            """,
-            enrollment_id, student_id, course_id, joined_at_dt
+            "INSERT INTO enrollments (id, student_id, course_id, joined_at) VALUES ($1,$2,$3,$4)",
+            enrollment_id, student_id, course_id, joined_at,
         )
-
-        # Update Firestore
-        db_firestore.collection("enrollments").document(enrollment_id).set({
-            "id": enrollment_id,
-            "student_id": student_id,
-            "course_id": course_id,
-            "joined_at": joined_at_str
-        })
-
         return {"message": "Successfully enrolled", "enrollment_id": enrollment_id}
-
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to enroll: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 @router.get("/my-courses-student")
-async def get_student_courses(student_id: str, conn = Depends(get_db)):
-    """
-    Học sinh lấy danh sách khóa học đã tham gia
-    """
+async def get_student_courses(student_id: str, conn=Depends(get_db)):
     try:
-        # Get enrollments
         enrollments = await conn.fetch(
-            "SELECT course_id FROM enrollments WHERE student_id = $1",
-            student_id
+            "SELECT course_id FROM enrollments WHERE student_id=$1", student_id
         )
-
         if not enrollments:
             return []
-
-        course_ids = [e['course_id'] for e in enrollments]
-
-        # Get course details
-        placeholders = ",".join(f"${i}" for i in range(1, len(course_ids) + 1))
-        courses = await conn.fetch(
-            f"SELECT * FROM courses WHERE id IN ({placeholders})",
-            *course_ids
-        )
-
-        return [dict(course) for course in courses]
-
+        ids = [e["course_id"] for e in enrollments]
+        placeholders = ",".join(f"${i+1}" for i in range(len(ids)))
+        rows = await conn.fetch(f"SELECT * FROM courses WHERE id IN ({placeholders})", *ids)
+        return [_row_to_course(r) for r in rows]
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch courses: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 @router.get("/{course_id}/documents")
-async def get_course_documents(course_id: str, conn = Depends(get_db)):
-    """
-    Lấy danh sách tài liệu của khóa học
-    """
+async def get_course_documents(course_id: str, conn=Depends(get_db)):
     try:
-        documents = await conn.fetch(
-            "SELECT * FROM course_documents WHERE course_id = $1 ORDER BY uploaded_at DESC",
-            course_id
+        rows = await conn.fetch(
+            "SELECT * FROM course_documents WHERE course_id=$1 ORDER BY uploaded_at DESC", course_id
         )
-        return [dict(doc) for doc in documents]
-
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["uploaded_at"] = str(d["uploaded_at"])
+            result.append(d)
+        return result
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch documents: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))

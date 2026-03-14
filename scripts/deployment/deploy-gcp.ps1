@@ -148,7 +148,6 @@ DATABASE_URL=postgresql+asyncpg://novatutor-user:$DbUserPassword@/novatutor?host
 
 # API Keys
 GOOGLE_API_KEY=$GeminiApiKey
-NEXT_PUBLIC_GEMINI_API_KEY=$GeminiApiKey
 
 # LLM Provider
 LLM_PROVIDER=google
@@ -227,7 +226,7 @@ gcloud run deploy $cloudRunFrontend `
     --platform=managed `
     --region=$Region `
     --allow-unauthenticated `
-    --set-env-vars="NEXT_PUBLIC_API_URL=$backendUrl,NEXT_PUBLIC_GEMINI_API_KEY=$GeminiApiKey" `
+    --set-env-vars="NEXT_PUBLIC_API_URL=$backendUrl" `
     --memory=1Gi `
     --cpu=1 `
     --timeout=3600 `

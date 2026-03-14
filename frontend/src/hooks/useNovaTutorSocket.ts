@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { GoogleGenAI, Modality } from "@google/genai";
+import { authService } from '@/services/authService';
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
 // --- Constants & Types ---
 const MODEL_NAME = "gemini-2.5-flash-native-audio-preview-09-2025";
@@ -153,13 +156,26 @@ export const useNovaTutorSocket = (): NovaTutorSocketHook => {
       setDebugInfo("Initializing audio...");
       await initAudio();
 
+      setDebugInfo("Requesting secure Gemini key...");
+      const token = authService.getToken();
+      const keyResponse = await fetch(`${API_URL}/system/gemini-key`, {
+        method: 'GET',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: 'include',
+      });
+
+      if (!keyResponse.ok) {
+        throw new Error('Cannot get Gemini runtime key from backend');
+      }
+
+      const { api_key } = await keyResponse.json();
+      if (!api_key) {
+        throw new Error('Gemini runtime key is empty');
+      }
+
       setDebugInfo("Connecting to Gemini...");
 
-      // Use API key if available, otherwise rely on GCP authentication
-      const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
-      const ai = new GoogleGenAI({
-        apiKey: apiKey || undefined // If no API key, use GCP default credentials
-      });
+      const ai = new GoogleGenAI({ apiKey: api_key });
 
       const sessionPromise = ai.live.connect({
         model: MODEL_NAME,

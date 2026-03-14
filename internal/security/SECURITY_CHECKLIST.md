@@ -162,3 +162,26 @@ git push
 - [BFG Repo-Cleaner](https://rtyley.github.io/bfg-repo-cleaner/)
 - [Git Filter-Branch](https://git-scm.com/docs/git-filter-branch)
 
+---
+
+## 🛡️ Phase 4 Runtime Security Checklist
+
+### Auth hardening
+- [ ] `ENFORCE_STRONG_JWT_SECRET=true` trên production
+- [ ] `JWT_SECRET_KEY` >= 32 ký tự, không chứa chuỗi yếu mặc định
+- [ ] Chỉ chấp nhận role hợp lệ (`student`, `teacher`) ở register flow
+- [ ] Password tối thiểu theo `AUTH_PASSWORD_MIN_LENGTH`
+
+### API protection
+- [ ] Rate limit middleware đang bật
+- [ ] Kiểm tra `X-RateLimit-Limit` và `X-RateLimit-Remaining` xuất hiện trên response
+- [ ] Auth endpoints dùng ngưỡng rate limit phù hợp (`RATE_LIMIT_AUTH_RPM`)
+
+### HTTP hardening
+- [ ] Security headers middleware bật
+- [ ] Có các header: `X-Content-Type-Options`, `X-Frame-Options`, `Content-Security-Policy`
+
+### Observability
+- [ ] Access log middleware bật
+- [ ] Có `X-Request-ID` trong response và log JSON tương ứng
+

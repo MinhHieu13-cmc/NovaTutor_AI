@@ -91,27 +91,83 @@ ALTER TABLE learning_progress ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFA
 CREATE INDEX IF NOT EXISTS idx_learning_progress_student_id ON learning_progress(student_id);
 CREATE INDEX IF NOT EXISTS idx_learning_progress_course_id ON learning_progress(course_id);
 
+-- AI Lab sessions table
+CREATE TABLE IF NOT EXISTS ai_lab_sessions (
+  id VARCHAR(255) PRIMARY KEY,
+  student_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  course_id VARCHAR(255) REFERENCES courses(id) ON DELETE SET NULL,
+  title VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_lab_sessions_student_id ON ai_lab_sessions(student_id);
+CREATE INDEX IF NOT EXISTS idx_ai_lab_sessions_course_id ON ai_lab_sessions(course_id);
+
 -- Chat history table (for storing conversations)
 CREATE TABLE IF NOT EXISTS chat_history (
   id VARCHAR(255) PRIMARY KEY,
   student_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   course_id VARCHAR(255) REFERENCES courses(id) ON DELETE SET NULL,
+  session_id VARCHAR(255),
   message TEXT NOT NULL,
   role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant')),
   emotion VARCHAR(50),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS student_id VARCHAR(255);
-ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS course_id VARCHAR(255);
-ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS message TEXT;
-ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS role VARCHAR(20);
-ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS emotion VARCHAR(50);
-ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS session_id VARCHAR(255);
 
 CREATE INDEX IF NOT EXISTS idx_chat_history_student_id ON chat_history(student_id);
 CREATE INDEX IF NOT EXISTS idx_chat_history_course_id ON chat_history(course_id);
+CREATE INDEX IF NOT EXISTS idx_chat_history_session_id ON chat_history(session_id);
 CREATE INDEX IF NOT EXISTS idx_chat_history_created_at ON chat_history(created_at);
+
+-- Phase 2: Adaptive quiz sessions
+CREATE TABLE IF NOT EXISTS adaptive_quiz_sessions (
+  id VARCHAR(255) PRIMARY KEY,
+  student_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  course_id VARCHAR(255) NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  topic VARCHAR(255) NOT NULL,
+  difficulty VARCHAR(20) NOT NULL,
+  questions_json JSONB NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_adaptive_quiz_sessions_student_id ON adaptive_quiz_sessions(student_id);
+CREATE INDEX IF NOT EXISTS idx_adaptive_quiz_sessions_course_id ON adaptive_quiz_sessions(course_id);
+
+-- Phase 2: Quiz attempts
+CREATE TABLE IF NOT EXISTS quiz_attempts (
+  id VARCHAR(255) PRIMARY KEY,
+  quiz_id VARCHAR(255) REFERENCES adaptive_quiz_sessions(id) ON DELETE SET NULL,
+  student_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  course_id VARCHAR(255) NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  topic VARCHAR(255) NOT NULL,
+  score NUMERIC(5,2) NOT NULL,
+  correct_count INTEGER NOT NULL,
+  total_questions INTEGER NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_quiz_attempts_student_id ON quiz_attempts(student_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_attempts_course_id ON quiz_attempts(course_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_attempts_created_at ON quiz_attempts(created_at);
+
+-- Phase 2: Topic mastery snapshots
+CREATE TABLE IF NOT EXISTS topic_mastery (
+  student_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  course_id VARCHAR(255) NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  topic VARCHAR(255) NOT NULL,
+  mastery_score NUMERIC(5,2) NOT NULL,
+  last_score NUMERIC(5,2) NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 1,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(student_id, course_id, topic)
+);
+
+CREATE INDEX IF NOT EXISTS idx_topic_mastery_student_id ON topic_mastery(student_id);
+CREATE INDEX IF NOT EXISTS idx_topic_mastery_course_id ON topic_mastery(course_id);
 
 -- Enable pgvector extension for embeddings
 CREATE EXTENSION IF NOT EXISTS vector;

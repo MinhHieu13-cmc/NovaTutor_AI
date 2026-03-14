@@ -5,7 +5,7 @@ from vertexai.generative_models import GenerativeModel, Content, Part
 from app.domain.services.interfaces import ILLMProvider, ChatMessage, LLMResponse
 
 class VertexAIProvider(ILLMProvider):
-    def __init__(self, project_id: str, location: str, default_model: str = "gemini-1.5-flash-002"):
+    def __init__(self, project_id: str, location: str, default_model: str = "gemini-2.5-flash"):
         self.project_id = project_id
         self.location = location
         self.default_model = default_model

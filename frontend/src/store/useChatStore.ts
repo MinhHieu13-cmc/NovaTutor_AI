@@ -1,8 +1,10 @@
 import { create } from 'zustand';
+import type { ChatSource } from '@/services/ragService';
 
-interface Message {
+export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
+  sources?: ChatSource[];
 }
 
 interface ChatState {
@@ -19,6 +21,7 @@ interface ChatState {
     total: number;
   }[];
   addMessage: (message: Message) => void;
+  setMessages: (messages: Message[]) => void;
   setStreaming: (status: boolean) => void;
   setSpeaking: (status: boolean) => void;
   setMuted: (status: boolean) => void;
@@ -46,6 +49,7 @@ export const useChatStore = create<ChatState>((set) => ({
   addMessage: (message) => set((state) => ({ 
     messages: [...state.messages, message] 
   })),
+  setMessages: (messages) => set({ messages }),
   setStreaming: (status) => set({ isStreaming: status }),
   setSpeaking: (status) => set({ isSpeaking: status }),
   setMuted: (status) => set({ isMuted: status }),

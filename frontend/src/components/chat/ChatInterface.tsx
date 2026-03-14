@@ -3,18 +3,56 @@
 import { useState, useEffect, useRef } from 'react';
 import { ragService, type ChatMessage, type ChatSource } from '@/services/ragService';
 import { authService } from '@/services/authService';
+import { useNovaTutorSocket } from '@/hooks/useNovaTutorSocket';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface ChatInterfaceProps {
   courseId?: string;
   courseName?: string;
+  onVoiceStateChange?: (state: {
+    isConnected: boolean;
+    isRecording: boolean;
+    isSpeaking: boolean;
+    currentEmotion: string;
+    currentViseme: Record<string, number>;
+  }) => void;
 }
 
-export default function ChatInterface({ courseId, courseName }: ChatInterfaceProps) {
+export default function ChatInterface({ courseId, courseName, onVoiceStateChange }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [sources, setSources] = useState<ChatSource[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Voice chat integration
+  const {
+    connect,
+    disconnect,
+    isConnected,
+    isRecording,
+    startRecording,
+    stopRecording,
+    transcript,
+    error: voiceError,
+    currentViseme,
+    isSpeaking,
+    currentEmotion,
+  } = useNovaTutorSocket();
+
+  // Notify parent of voice state changes
+  useEffect(() => {
+    if (onVoiceStateChange) {
+      onVoiceStateChange({
+        isConnected,
+        isRecording,
+        isSpeaking,
+        currentEmotion,
+        currentViseme,
+      });
+    }
+  }, [isConnected, isRecording, isSpeaking, currentEmotion, currentViseme, onVoiceStateChange]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -85,6 +123,29 @@ export default function ChatInterface({ courseId, courseName }: ChatInterfacePro
     }
   };
 
+  const toggleVoice = async () => {
+    if (isConnected) {
+      disconnect();
+    } else {
+      await connect();
+    }
+  };
+
+  const toggleRecording = () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  };
+
+  // Auto-send transcript as message
+  useEffect(() => {
+    if (transcript && transcript.trim()) {
+      setInput(transcript);
+    }
+  }, [transcript]);
+
   return (
     <div className="flex flex-col h-full bg-white rounded-lg shadow-lg">
       {/* Header */}
@@ -96,14 +157,14 @@ export default function ChatInterface({ courseId, courseName }: ChatInterfacePro
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
+      <div className="h-0 min-h-0 grow space-y-4 overflow-y-auto bg-gray-50 p-4">
         {messages.map((msg, idx) => (
           <div
             key={idx}
             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             <div
-              className={`max-w-[70%] rounded-lg p-3 ${
+              className={`max-w-[75%] rounded-lg p-3 ${
                 msg.role === 'user'
                   ? 'bg-blue-600 text-white'
                   : 'bg-white text-gray-800 shadow'
@@ -115,7 +176,16 @@ export default function ChatInterface({ courseId, courseName }: ChatInterfacePro
                   <span className="font-semibold text-sm">Nova</span>
                 </div>
               )}
-              <p className="whitespace-pre-wrap">{msg.content}</p>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                className={
+                  msg.role === 'user'
+                    ? 'prose prose-sm prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0'
+                    : 'prose prose-sm max-w-none text-gray-800 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0'
+                }
+              >
+                {msg.content}
+              </ReactMarkdown>
               <p className="text-xs opacity-70 mt-2">
                 {msg.timestamp.toLocaleTimeString()}
               </p>
@@ -160,6 +230,54 @@ export default function ChatInterface({ courseId, courseName }: ChatInterfacePro
 
       {/* Input */}
       <div className="border-t p-4 bg-white rounded-b-lg">
+        {/* Voice Controls */}
+        <div className="flex gap-2 mb-3">
+          <button
+            onClick={toggleVoice}
+            className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-colors text-sm font-medium ${
+              isConnected
+                ? 'bg-red-600 hover:bg-red-700 text-white'
+                : 'bg-green-600 hover:bg-green-700 text-white'
+            }`}
+          >
+            {isConnected ? '🎙️ Stop Voice' : '🎙️ Start Voice'}
+          </button>
+
+          {isConnected && (
+            <button
+              onClick={toggleRecording}
+              className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-colors text-sm font-medium ${
+                isRecording
+                  ? 'bg-red-600 hover:bg-red-700 text-white'
+                  : 'bg-blue-600 hover:bg-blue-700 text-white'
+              }`}
+            >
+              {isRecording ? (
+                <>
+                  <span className="inline-block w-2 h-2 rounded-full bg-white animate-pulse" />
+                  Recording
+                </>
+              ) : (
+                '🎤 Record'
+              )}
+            </button>
+          )}
+
+          {transcript && (
+            <div className="flex-1 px-3 py-2 bg-blue-50 text-blue-800 rounded-lg text-xs flex items-center">
+              <span className="font-medium">Transcript:</span>
+              <span className="ml-2 truncate">{transcript}</span>
+            </div>
+          )}
+
+          {voiceError && (
+            <div className="flex-1 px-3 py-2 bg-red-50 text-red-800 rounded-lg text-xs">
+              {voiceError}
+            </div>
+          )}
+        </div>
+
+        {/* Text Input */}
         <div className="flex gap-2">
           <textarea
             value={input}

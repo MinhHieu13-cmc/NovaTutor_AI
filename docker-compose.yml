@@ -1,5 +1,7 @@
 services:
-  # PostgreSQL Database
+  # ─────────────────────────────────────────────
+  # PostgreSQL + pgvector  (LOCAL only)
+  # ─────────────────────────────────────────────
   db:
     image: pgvector/pgvector:pg15
     container_name: novatutor_db
@@ -17,6 +19,9 @@ services:
       timeout: 5s
       retries: 5
 
+  # ─────────────────────────────────────────────
+  # FastAPI Backend
+  # ─────────────────────────────────────────────
   backend:
     container_name: novatutor_backend
     build:
@@ -24,21 +29,30 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
-    env_file: .env
+    env_file: .env                          # dùng .env ở root
     environment:
+      # Override DATABASE_URL để trỏ đúng container db local
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/novatutor
       DEBUG: "false"
     depends_on:
       db:
         condition: service_healthy
 
+  # ─────────────────────────────────────────────
+  # Next.js Frontend
+  # Next.js standalone server lắng nghe PORT=8080 bên trong container
+  # map ra host:3000
+  # ─────────────────────────────────────────────
   frontend:
     container_name: novatutor_frontend
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # Trỏ tới backend local (browser gọi từ máy host)
+        NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
     ports:
-      - "3000:3000"
+      - "3000:8080"           # container dùng PORT=8080, host dùng 3000
     env_file: .env
     depends_on:
       - backend

@@ -9,12 +9,24 @@ import asyncpg
 from google.cloud import storage, aiplatform
 from PyPDF2 import PdfReader
 
-# Initialize GCP clients
-storage_client = storage.Client()
-aiplatform.init(
-    project=os.getenv("GCP_PROJECT_ID"),
-    location=os.getenv("GCP_LOCATION", "us-central1")
-)
+# Initialize GCP clients lazily so the app can boot locally without ADC.
+_storage_init_error: str | None = None
+try:
+    storage_client = storage.Client()
+except Exception as _exc:
+    storage_client = None
+    _storage_init_error = str(_exc)
+
+# Initialize Vertex AI lazily – skip when GCP_PROJECT_ID is absent.
+try:
+    _gcp_project = os.getenv("GCP_PROJECT_ID")
+    if _gcp_project:
+        aiplatform.init(
+            project=_gcp_project,
+            location=os.getenv("GCP_LOCATION", "us-central1")
+        )
+except Exception:
+    pass
 
 # Database URL
 _DATABASE_URL_RAW = os.getenv("DATABASE_URL", "")
@@ -52,6 +64,12 @@ class ProductionRAGEngine:
     
     async def _download_and_extract_text(self, document_url: str) -> str:
         """Download PDF from Cloud Storage and extract text"""
+        if storage_client is None:
+            raise RuntimeError(
+                f"Cloud Storage client is not available. "
+                f"Set GOOGLE_APPLICATION_CREDENTIALS or use workload identity. "
+                f"Root cause: {_storage_init_error}"
+            )
         try:
             # Parse GCS URL
             if document_url.startswith("gs://"):
